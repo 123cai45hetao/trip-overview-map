@@ -162,6 +162,7 @@ body {
   border: 1.5px solid var(--line);
   border-radius: 11px;
 }
+.picked[hidden] { display: none; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .dot-accent { background: var(--accent); box-shadow: 0 0 0 3px rgba(217, 93, 57, .2); }
 .dot-navy { background: var(--navy); box-shadow: 0 0 0 3px rgba(34, 65, 94, .16); }
@@ -312,6 +313,7 @@ body {
   backdrop-filter: blur(4px);
   padding: 20px;
 }
+.key-modal[hidden] { display: none; }
 .key-card {
   width: min(460px, 100%);
   background: var(--paper);
