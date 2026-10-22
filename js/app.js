@@ -165,10 +165,18 @@ function bindSuggest(inputEl, boxEl, listEl, onPick) {
     if (kw.length < 2) { listEl.hidden = true; listEl.innerHTML = ''; return; }
     suggestTimer = setTimeout(async () => {
       try {
-        if (!suggestService) suggestService = new TMap.service.Suggestion({ pagination: false });
-        const res = await suggestService.search({ keyword: kw, region: '', regionFix: 0 });
+        if (!suggestService) suggestService = new TMap.service.Suggestion();
+        const params = { keyword: kw };
+        if (state.hotel) {
+          params.location = new TMap.LatLng(state.hotel.location.lat, state.hotel.location.lng);
+        }
+        const res = await suggestService.search(params);
         const items = (res && res.data) || [];
-        if (!items.length) { listEl.hidden = true; return; }
+        if (!items.length) {
+          listEl.innerHTML = '<div class="suggest-item"><small>没有找到相关地点</small></div>';
+          listEl.hidden = false;
+          return;
+        }
         listEl.innerHTML = items.slice(0, 8).map((it, i) =>
           `<div class="suggest-item" data-i="${i}"><b>${esc(it.title)}</b><small>${esc(it.address || '')}</small></div>`
         ).join('');
@@ -177,6 +185,7 @@ function bindSuggest(inputEl, boxEl, listEl, onPick) {
           el.addEventListener('mousedown', (ev) => {
             ev.preventDefault();
             const it = items[Number(el.dataset.i)];
+            if (!it) return;
             listEl.hidden = true;
             inputEl.value = '';
             onPick({
@@ -188,7 +197,8 @@ function bindSuggest(inputEl, boxEl, listEl, onPick) {
         });
       } catch (err) {
         console.warn('联想失败', err);
-        listEl.hidden = true;
+        listEl.innerHTML = `<div class="suggest-item"><small>搜索失败：${esc(err && err.message || err)}<br>请确认 Key 已启用 WebServiceAPI</small></div>`;
+        listEl.hidden = false;
       }
     }, 250);
   });
