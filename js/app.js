@@ -32,8 +32,29 @@ const svgUrl = (inner, bg) => 'data:image/svg+xml;charset=utf-8,' + encodeURICom
 const ICON_HOTEL = svgUrl('<g fill="#fffdf8"><rect x="10" y="10" width="14" height="16" rx="1.5"/><g fill="#d95d39"><rect x="12.5" y="13" width="3" height="3"/><rect x="18.5" y="13" width="3" height="3"/><rect x="12.5" y="18.5" width="3" height="3"/><rect x="18.5" y="18.5" width="3" height="3"/><rect x="15" y="23" width="4" height="3"/></g></g>', '#d95d39');
 const ICON_SPOT  = svgUrl('<circle cx="17" cy="15" r="7" fill="none" stroke="#fffdf8" stroke-width="2.5"/><circle cx="17" cy="15" r="2.4" fill="#fffdf8"/>', '#22415e');
 
+/* ─────────── 安全存储（localStorage 不可用时退化为内存） ─────────── */
+const memoryStore = {};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (_) { return memoryStore[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) { memoryStore[k] = v; } },
+};
+
+/* ─────────── 全局错误可见化 ─────────── */
+function showFatal(msg) {
+  let bar = document.getElementById('fatalBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'fatalBar';
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:999;background:#b8472a;color:#fff;font:13px/1.6 sans-serif;padding:10px 16px;';
+    document.body.appendChild(bar);
+  }
+  bar.textContent = '⚠ ' + msg;
+}
+window.addEventListener('error', (e) => showFatal(e.message || '脚本错误'));
+window.addEventListener('unhandledrejection', (e) => showFatal(String(e.reason && e.reason.message || e.reason)));
+
 /* ─────────── Key 管理 ─────────── */
-function getKey() { return localStorage.getItem(KEY_STORAGE) || ''; }
+function getKey() { return store.get(KEY_STORAGE) || ''; }
 
 function showKeyModal() { $('keyModal').hidden = false; $('keyInput').value = getKey(); setTimeout(() => $('keyInput').focus(), 60); }
 
@@ -46,7 +67,7 @@ function onKeySave() {
   const key = $('keyInput').value.trim();
   if (!key) { $('keyErr').hidden = false; return; }
   $('keyErr').hidden = true;
-  localStorage.setItem(KEY_STORAGE, key);
+  store.set(KEY_STORAGE, key);
   hideKeyModal();
   bootstrap();
 }
@@ -70,6 +91,9 @@ async function bootstrap() {
   const key = getKey();
   if (!key) { showKeyModal(); return; }
   if (state.sdkReady) { renderAll(); return; }
+  if (location.protocol === 'file:') {
+    showFatal('当前以 file:// 方式打开，地图服务可能受限。建议在项目目录运行 python -m http.server 8080 后访问 http://localhost:8080');
+  }
   try {
     await loadSDK(key);
     state.sdkReady = true;
@@ -200,13 +224,13 @@ function removeSpot(id) {
 
 function persist() {
   try {
-    localStorage.setItem(SPOTS_STORAGE, JSON.stringify({ hotel: state.hotel, spots: state.spots }));
+    store.set(SPOTS_STORAGE, JSON.stringify({ hotel: state.hotel, spots: state.spots }));
   } catch (_) { /* 忽略 */ }
 }
 
 function restoreSpots() {
   try {
-    const raw = JSON.parse(localStorage.getItem(SPOTS_STORAGE) || 'null');
+    const raw = JSON.parse(store.get(SPOTS_STORAGE) || 'null');
     if (raw && raw.hotel && Array.isArray(raw.spots)) {
       state.hotel = raw.hotel;
       state.spots = raw.spots.map((s) => ({ ...s, drive: null }));
