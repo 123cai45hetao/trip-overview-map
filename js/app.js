@@ -166,52 +166,104 @@ function initMap() {
 /* ─────────── 搜索联想 ─────────── */
 let suggestService = null;
 let suggestTimer = null;
+const searchCache = new Map();   // 关键词 -> 结果数组，避免重复请求
+
+// 最近使用的地点（点选输入框即出，免打字）
+const HISTORY_KEY = 'trip-overview.history';
+const HISTORY_MAX = 8;
+
+function getHistory() {
+  try { return JSON.parse(store.get(HISTORY_KEY) || '[]') || []; } catch (_) { return []; }
+}
+
+function pushHistory(place) {
+  try {
+    const list = getHistory().filter((p) => !(p.name === place.name && p.address === place.address));
+    list.unshift({ name: place.name, address: place.address, location: place.location });
+    store.set(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+  } catch (_) { /* 忽略 */ }
+}
+
+function renderHistory(listEl, items, onPick) {
+  listEl.innerHTML = '<div class="suggest-item suggest-title"><small>最近使用</small></div>' +
+    items.map((p, i) =>
+      `<div class="suggest-item" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(p.address || '')}</small></div>`
+    ).join('');
+  listEl.hidden = false;
+  listEl.querySelectorAll('.suggest-item[data-i]').forEach((el) => {
+    el.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      const p = items[Number(el.dataset.i)];
+      if (!p) return;
+      listEl.hidden = true;
+      inputEl.value = '';
+      onPick(p);
+    });
+  });
+}
 
 function bindSuggest(inputEl, boxEl, listEl, onPick) {
+  const showHistory = () => {
+    const h = getHistory();
+    if (h.length) renderHistory(listEl, h, onPick);
+  };
+
+  inputEl.addEventListener('focus', () => { if (!inputEl.value.trim()) showHistory(); });
+
   inputEl.addEventListener('input', () => {
     clearTimeout(suggestTimer);
     const kw = inputEl.value.trim();
     if (kw.length < 2) { listEl.hidden = true; listEl.innerHTML = ''; return; }
+    // 命中缓存立即渲染，不发请求
+    if (searchCache.has(kw)) { renderItems(searchCache.get(kw)); return; }
     suggestTimer = setTimeout(async () => {
       try {
+        listEl.innerHTML = '<div class="suggest-item"><small>搜索中…</small></div>';
+        listEl.hidden = false;
         if (!suggestService) suggestService = new TMap.service.Suggestion({ pageSize: 8, region: '', regionFix: false });
         const params = { keyword: kw };
         if (state.hotel) {
           params.location = new TMap.LatLng(state.hotel.location.lat, state.hotel.location.lng);
         }
         const res = await suggestService.getSuggestions(params);
-        const items = (res && res.data) || [];
-        if (!items.length) {
-          listEl.innerHTML = '<div class="suggest-item"><small>没有找到相关地点</small></div>';
-          listEl.hidden = false;
-          return;
-        }
-        listEl.innerHTML = items.slice(0, 8).map((it, i) =>
-          `<div class="suggest-item" data-i="${i}"><b>${esc(it.title)}</b><small>${esc(it.address || '')}</small></div>`
-        ).join('');
-        listEl.hidden = false;
-        listEl.querySelectorAll('.suggest-item').forEach((el) => {
-          el.addEventListener('mousedown', (ev) => {
-            ev.preventDefault();
-            const it = items[Number(el.dataset.i)];
-            if (!it) return;
-            listEl.hidden = true;
-            inputEl.value = '';
-            onPick({
-              name: it.title,
-              address: it.address || '',
-              location: { lat: it.location.lat, lng: it.location.lng },
-            });
-          });
-        });
+        const items = ((res && res.data) || []).map((it) => ({
+          name: it.title, address: it.address || '', location: { lat: it.location.lat, lng: it.location.lng },
+        }));
+        searchCache.set(kw, items);
+        renderItems(items);
       } catch (err) {
         console.warn('联想失败', err);
         listEl.innerHTML = `<div class="suggest-item"><small>搜索失败：${esc(err && err.message || err)}<br>请确认 Key 已启用 WebServiceAPI</small></div>`;
         listEl.hidden = false;
       }
-    }, 250);
+    }, 400);
   });
-  inputEl.addEventListener('blur', () => setTimeout(() => { listEl.hidden = true; }, 150));
+
+  function renderItems(items) {
+    if (!items.length) {
+      listEl.innerHTML = '<div class="suggest-item"><small>没有找到相关地点</small></div>';
+      listEl.hidden = false;
+      return;
+    }
+    listEl.innerHTML = items.slice(0, 8).map((it, i) =>
+      `<div class="suggest-item" data-i="${i}"><b>${esc(it.name)}</b><small>${esc(it.address || '')}</small></div>`
+    ).join('');
+    listEl.hidden = false;
+    listEl.querySelectorAll('.suggest-item[data-i]').forEach((el) => {
+      // pointerdown 在触屏上比 mousedown 时序更稳，且先于 blur
+      el.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        const it = items[Number(el.dataset.i)];
+        if (!it) return;
+        listEl.hidden = true;
+        inputEl.value = '';
+        pushHistory(it);
+        onPick(it);
+      });
+    });
+  }
+
+  inputEl.addEventListener('blur', () => setTimeout(() => { listEl.hidden = true; }, 200));
 }
 
 function esc(s) {
