@@ -371,6 +371,10 @@ body {
     gap: 8px;
   }
   .panel.collapsed { height: 52px; overflow: hidden; }
+  /* 面板整体滚动，而不是仅目的地列表内部滚动 */
+  .panel { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  .panel-head { position: sticky; top: -14px; background: var(--paper); z-index: 5; padding-top: 14px; margin-top: -14px; }
+  .spot-list { overflow: visible; flex: none; min-height: 0; }
   .panel.collapsed .panel-rule,
   .panel.collapsed .search-box,
   .panel.collapsed .picked,
