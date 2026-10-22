@@ -30,7 +30,12 @@ const svgUrl = (inner, bg) => 'data:image/svg+xml;charset=utf-8,' + encodeURICom
   </svg>`
 );
 const ICON_HOTEL = svgUrl('<g fill="#fffdf8"><rect x="10" y="10" width="14" height="16" rx="1.5"/><g fill="#d95d39"><rect x="12.5" y="13" width="3" height="3"/><rect x="18.5" y="13" width="3" height="3"/><rect x="12.5" y="18.5" width="3" height="3"/><rect x="18.5" y="18.5" width="3" height="3"/><rect x="15" y="23" width="4" height="3"/></g></g>', '#d95d39');
-const ICON_SPOT  = svgUrl('<circle cx="17" cy="15" r="7" fill="none" stroke="#fffdf8" stroke-width="2.5"/><circle cx="17" cy="15" r="2.4" fill="#fffdf8"/>', '#22415e');
+
+// 带编号的目的地图钉（数字画进 SVG，与左侧列表序号对应）
+const MAX_SPOT_STYLES = 50;
+const ICON_SPOTS = Array.from({ length: MAX_SPOT_STYLES }, (_, i) =>
+  svgUrl(`<text x="17" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#fffdf8">${i + 1}</text>`, '#22415e')
+);
 
 /* ─────────── 安全存储（localStorage 不可用时退化为内存） ─────────── */
 const memoryStore = {};
@@ -114,12 +119,16 @@ function initMap() {
     viewMode: '2D',
   });
 
+  const spotStyles = {};
+  for (let i = 0; i < MAX_SPOT_STYLES; i++) {
+    spotStyles['spot-' + i] = new TMap.MarkerStyle({
+      width: 34, height: 44, anchor: { x: 17, y: 44 }, src: ICON_SPOTS[i],
+    });
+  }
+
   state.markerLayer = new TMap.MultiMarker({
     map: state.map,
-    styles: {
-      hotel: new TMap.MarkerStyle({ width: 34, height: 44, anchor: { x: 17, y: 44 }, src: ICON_HOTEL }),
-      spot:  new TMap.MarkerStyle({ width: 34, height: 44, anchor: { x: 17, y: 44 }, src: ICON_SPOT }),
-    },
+    styles: { hotel: new TMap.MarkerStyle({ width: 34, height: 44, anchor: { x: 17, y: 44 }, src: ICON_HOTEL }), ...spotStyles },
     geometries: [],
   });
 
@@ -346,7 +355,7 @@ function renderMarkers() {
     geoms.push({ id: 'hotel', styleId: 'hotel', position: new TMap.LatLng(state.hotel.location.lat, state.hotel.location.lng) });
   }
   state.spots.forEach((s, i) => {
-    geoms.push({ id: s.id, styleId: 'spot', position: new TMap.LatLng(s.location.lat, s.location.lng), properties: { index: i + 1 } });
+    geoms.push({ id: s.id, styleId: 'spot-' + i, position: new TMap.LatLng(s.location.lat, s.location.lng), properties: { index: i + 1 } });
   });
   state.markerLayer.setGeometries(geoms);
 
