@@ -353,28 +353,28 @@ body {
 .key-input-row input:focus { border-color: var(--accent); }
 .key-err { color: var(--accent-deep); font-size: 12px; margin-top: 8px; }
 
-/* ── 移动端：底部抽屉 ── */
+/* ── 移动端：整页滚动（地图在上，行程单在下，一起滚） ── */
 @media (max-width: 760px) {
-  .layout { flex-direction: column-reverse; }
-  /* 16px 以上可避免 iOS 聚焦输入框时自动放大页面 */
-  .search-box input, .key-input-row input { font-size: 16px; }
-  .search-box input, .btn, .row-x, .icon-btn { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  html, body { overflow: auto; height: auto; }
+  .layout { flex-direction: column-reverse; height: auto; min-height: 100dvh; }
+  .map-wrap { flex: none; height: 42vh; height: 42dvh; }
   .panel {
     width: 100%;
-    height: 46vh;
-    height: 46dvh;
+    height: auto;
+    flex: none;
     border-right: none;
     border-top: 2px dashed var(--paper-edge);
     box-shadow: 0 -8px 30px rgba(43, 38, 32, .12);
-    transition: height .28s ease;
     padding-top: 14px;
     gap: 8px;
   }
+  /* 16px 以上可避免 iOS 聚焦输入框时自动放大页面 */
+  .search-box input, .key-input-row input { font-size: 16px; }
+  .search-box input, .btn, .row-x, .icon-btn { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .panel.collapsed { height: 52px; overflow: hidden; }
-  /* 面板整体滚动，而不是仅目的地列表内部滚动 */
-  .panel { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
-  .panel-head { position: sticky; top: -14px; background: var(--paper); z-index: 5; padding-top: 14px; margin-top: -14px; }
+  .panel-head { position: sticky; top: 0; background: var(--paper); z-index: 5; padding-top: 0; margin-top: 0; }
   .spot-list { overflow: visible; flex: none; min-height: 0; }
+  .sheet-toggle { display: none; }
   .panel.collapsed .panel-rule,
   .panel.collapsed .search-box,
   .panel.collapsed .picked,
@@ -382,7 +382,6 @@ body {
   .panel.collapsed .empty-hint,
   .panel.collapsed .panel-footer,
   .panel.collapsed .barcode { display: none; }
-  .sheet-toggle { display: block; }
   .brand-title { font-size: 19px; letter-spacing: 4px; }
   .brand-mark { width: 38px; height: 38px; font-size: 18px; }
   .suggest { max-height: 160px; }
