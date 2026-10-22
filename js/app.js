@@ -165,12 +165,12 @@ function bindSuggest(inputEl, boxEl, listEl, onPick) {
     if (kw.length < 2) { listEl.hidden = true; listEl.innerHTML = ''; return; }
     suggestTimer = setTimeout(async () => {
       try {
-        if (!suggestService) suggestService = new TMap.service.Suggestion();
+        if (!suggestService) suggestService = new TMap.service.Suggestion({ pageSize: 8, region: '', regionFix: false });
         const params = { keyword: kw };
         if (state.hotel) {
           params.location = new TMap.LatLng(state.hotel.location.lat, state.hotel.location.lng);
         }
-        const res = await suggestService.search(params);
+        const res = await suggestService.getSuggestions(params);
         const items = (res && res.data) || [];
         if (!items.length) {
           listEl.innerHTML = '<div class="suggest-item"><small>没有找到相关地点</small></div>';
@@ -257,15 +257,27 @@ function haversineKm(a, b) {
 }
 
 let drivingService = null;
+
+// WebService 返回的路线坐标经过前向差分压缩，需解压
+function decompressPolyline(coords) {
+  if (!coords || typeof coords[0] !== 'number') return coords || null; // 已是坐标对象/点对
+  const kr = 1000000;
+  for (let i = 2; i < coords.length; i++) coords[i] = coords[i - 2] + coords[i] / kr;
+  const out = [];
+  for (let i = 0; i < coords.length; i += 2) out.push({ lat: coords[i], lng: coords[i + 1] });
+  return out;
+}
+
 async function fetchDrive(from, to) {
   if (!drivingService) drivingService = new TMap.service.Driving({ policy: 'LEAST_TIME' });
   const res = await drivingService.search({ from: new TMap.LatLng(from.lat, from.lng), to: new TMap.LatLng(to.lat, to.lng) });
-  const route = res && res.routes && res.routes[0];
+  const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
+  const route = routes[0];
   if (!route) return null;
   return {
     distance: route.distance || 0,   // 米
     duration: route.duration || 0,   // 秒
-    path: route.coordinates || route.coors || route.polyline || null,
+    path: decompressPolyline(route.polyline),
   };
 }
 
