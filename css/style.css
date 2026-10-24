@@ -208,6 +208,23 @@ body {
 .route-detail li b { display: block; font-size: 13px; }
 .route-detail li small { display: block; font-size: 11.5px; color: var(--ink-soft); line-height: 1.6; }
 
+/* 出发时间 */
+.depart-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; color: var(--ink-soft);
+  padding: 0 2px;
+}
+.depart-row input {
+  font-size: 15px;
+  font-family: var(--sans);
+  color: var(--ink);
+  padding: 6px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+.depart-row input:focus { border-color: var(--accent); outline: none; }
+
 /* 智能排序按钮 */
 .btn-sort {
   width: 100%;

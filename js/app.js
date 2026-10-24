@@ -514,6 +514,7 @@ function renderAll() {
   const hasAny = !!(state.hotel || state.spots.length);
   $('fitBtn').hidden = !hasAny;
   $('sortBtn').hidden = !(state.hotel && state.spots.length >= 2);
+  $('departRow').hidden = !(state.hotel && state.spots.length >= 2);
   $('modeTabs').hidden = !(state.hotel && state.spots.length >= 1);
 }
 
@@ -530,20 +531,22 @@ function renderList() {
   $('emptyHint').style.display = state.spots.length ? 'none' : '';
   ul.innerHTML = state.spots.map((s, i) => {
     const straight = state.hotel ? haversineKm(state.hotel.location, s.location) : null;
+    const winTxt = s.window ? ` ⏰${fmtMin(s.window.open)}-${fmtMin(s.window.close)}` : '';
     let distHtml;
     if (s.drive) {
-      distHtml = `<span class="spot-dist">🚗 ${(s.drive.distance / 1000).toFixed(1)} km · ${Math.round(s.drive.duration / 60)} 分钟</span>`;
+      distHtml = `<span class="spot-dist">🚗 ${(s.drive.distance / 1000).toFixed(1)} km · ${Math.round(s.drive.duration / 60)} 分钟${winTxt}</span>`;
     } else if (straight != null) {
-      distHtml = `<span class="spot-dist">直线 ${straight.toFixed(1)} km</span>`;
+      distHtml = `<span class="spot-dist">直线 ${straight.toFixed(1)} km${winTxt}</span>`;
     } else {
-      distHtml = '';
+      distHtml = `<span class="spot-dist${s.window ? '' : ''}">${winTxt}</span>`;
     }
     return `<li class="spot-row ${state.activeSpotId === s.id ? 'active' : ''}" data-id="${s.id}">
       <span class="spot-idx">${i + 1}</span>
       <div class="spot-main"><b>${esc(s.name)}</b><small>${esc(s.address || '')}</small></div>
       ${distHtml}
       <div class="spot-acts">
-        <button class="row-x act-route" title="查看驾车路线">🚗</button>
+        <button class="row-x act-time" title="设置可游玩时间段">⏰</button>
+        <button class="row-x act-route" title="查看路线">🧭</button>
         <button class="row-x act-del" title="删除">✕</button>
       </div>
     </li>`;
@@ -553,6 +556,7 @@ function renderList() {
     const id = row.dataset.id;
     row.querySelector('.act-del').addEventListener('click', () => removeSpot(id));
     row.querySelector('.act-route').addEventListener('click', () => toggleRoute(id));
+    row.querySelector('.act-time').addEventListener('click', () => editTimeWindow(id));
     row.addEventListener('click', (e) => {
       if (e.target.closest('button')) return;
       const s = state.spots.find((x) => x.id === id);
@@ -725,9 +729,20 @@ async function applySmartSort() {
     }
   }
 
-  // 2) 按耗时矩阵求最优顺序（闭环：最后返回酒店）
-  const pred = new Array(m).fill(0);
-  const order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, true) : solveGreedy(dur, pred, m - 1);
+  // 2) 按耗时矩阵求最优顺序（闭环返回酒店；带时间窗时用时间窗 DP）
+  const depart = (() => {
+    const v = $('departTime').value || '09:00';
+    const p = v.split(':');
+    return (+p[0]) * 60 + (+p[1]);
+  })();
+  const wins = [null, ...state.spots.map((s) => s.window || null)];
+  const durM = dur.map((row) => row.map((v) => v / 60));
+  let winOk = true;
+  let order = (m - 1) <= 12 ? solveDPTime(durM, wins, depart, m - 1, true) : null;
+  if (!order) {
+    if (state.spots.some((s) => s.window)) winOk = false; // 时间窗无法全部满足，退回纯耗时最优
+    order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, true) : solveGreedy(dur, pred, m - 1);
+  }
   state.spots = order.map((i) => state.spots[i]);
   state.activeSpotId = null;
   persist();
@@ -756,9 +771,10 @@ async function applySmartSort() {
   btn.disabled = false;
   btn.textContent = '🧭 智能排序 · 最短路线闭环';
 
-  // 分段行程单：每段的交通方式、上下车站、耗时
+  // 分段行程单：每段的交通方式、上下车站、耗时、预计到达时刻
   const box = $('routeDetail');
   const rows = [];
+  let arr = depart;
   for (let i = 0; i < seq.length - 1; i++) {
     const fromName = i === 0 ? '🏨 酒店' : `${i}. ${state.spots[i - 1].name}`;
     const toName = i + 1 < seq.length - 1 ? `${i + 1}. ${state.spots[i].name}` : '🏨 酒店';
@@ -776,11 +792,12 @@ async function applySmartSort() {
       min = (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
       desc = '直线估算';
     }
-    rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟 · ${esc(desc)}</small></li>`);
+    arr += min;
+    rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟 · 预计 ${fmtMin(arr)} 到达 · ${esc(desc)}</small></li>`);
   }
   box.innerHTML = `<div class="rd-title">📋 行程方案（${modeLabel()} · 闭环全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟）</div><ol>${rows.join('')}</ol>`;
   box.hidden = false;
-  showToast(`按真实交通排序：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${anyStraight || estimated ? '（含估算路段）' : ''}`);
+  showToast(`按真实交通排序：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${winOk ? '' : ' ⚠ 时间窗无法全部满足'}${anyStraight || estimated ? '（含估算路段）' : ''}`);
 }
 
 function solveDP(dist, pred, n, closed = true) {
@@ -857,6 +874,68 @@ function showToast(msg) {
   requestAnimationFrame(() => t.classList.add('show'));
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+function fmtMin(v) {
+  return `${String(Math.floor(((v % 1440) + 1440) % 1440 / 60)).padStart(2, '0')}:${String(Math.round(v) % 60).padStart(2, '0')}`;
+}
+
+function editTimeWindow(id) {
+  const s = state.spots.find((x) => x.id === id);
+  if (!s) return;
+  const cur = s.window ? `${fmtMin(s.window.open)}-${fmtMin(s.window.close)}` : '';
+  const input = prompt(`「${s.name}」的可游玩时间段\n格式：9:00-11:30（24 小时制，留空清除限制）\n排序时会保证在这个时间段内到达`, cur);
+  if (input === null) return;
+  const t = input.trim();
+  if (!t) {
+    s.window = null;
+  } else {
+    const m = t.match(/^(\d{1,2}):(\d{2})\s*[-—~至]\s*(\d{1,2}):(\d{2})$/);
+    if (!m) { alert('格式不对，示例：9:00-11:30'); return; }
+    const open = (+m[1]) * 60 + (+m[2]);
+    const close = (+m[3]) * 60 + (+m[4]);
+    if (close <= open) { alert('结束时间要晚于开始时间'); return; }
+    s.window = { open, close };
+  }
+  persist();
+  renderList();
+  showToast('时间窗已保存，请重新点「智能排序」生效');
+}
+
+/* 带时间窗的 DP：到达时刻超出景点时间窗的走法直接剪枝 */
+function solveDPTime(durM, wins, depart, n, closed) {
+  const m = n + 1, FULL = (1 << m) - 1, INF = Infinity;
+  const dpT = Array.from({ length: 1 << m }, () => new Array(m).fill(INF)); // 交通累计(分钟)
+  const dpA = Array.from({ length: 1 << m }, () => new Array(m).fill(INF)); // 实际时刻(分钟)
+  const parent = Array.from({ length: 1 << m }, () => new Array(m).fill(-1));
+  dpT[1][0] = 0;
+  dpA[1][0] = depart;
+  for (let mask = 1; mask <= FULL; mask++) {
+    for (let i = 0; i < m; i++) {
+      if (dpT[mask][i] === INF) continue;
+      for (let j = 1; j < m; j++) {
+        if (mask & (1 << j)) continue;
+        const arrive = dpA[mask][i] + durM[i][j];
+        const w = wins[j];
+        if (w && arrive > w.close) continue;          // 赶不上时间窗，此路不通
+        const start = w ? Math.max(arrive, w.open) : arrive; // 早到则在景点等待开门
+        const nm = mask | (1 << j);
+        const nt = dpT[mask][i] + durM[i][j];
+        if (nt < dpT[nm][j]) { dpT[nm][j] = nt; dpA[nm][j] = start; parent[nm][j] = i; }
+      }
+    }
+  }
+  let best = INF, last = -1;
+  for (let i = 1; i < m; i++) {
+    if (dpT[FULL][i] === INF) continue;
+    const total = dpT[FULL][i] + (closed ? durM[i][0] : 0);
+    if (total < best) { best = total; last = i; }
+  }
+  if (last < 0) return null; // 时间窗无法全部满足
+  const seq = [];
+  let cur = last, mask = FULL;
+  while (cur > 0) { seq.push(cur - 1); const p = parent[mask][cur]; mask ^= (1 << cur); cur = p; }
+  return seq.reverse();
 }
 
 /* ─────────── 事件绑定 ─────────── */
