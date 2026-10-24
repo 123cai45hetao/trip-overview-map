@@ -197,7 +197,7 @@ function bindTapSelect(el, onPick) {
   });
 }
 
-function renderHistory(listEl, items, onPick) {
+function renderHistory(listEl, items, onPick, inputEl) {
   listEl.innerHTML = '<div class="suggest-item suggest-title"><small>最近使用</small></div>' +
     items.map((p, i) =>
       `<div class="suggest-item" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(p.address || '')}</small></div>`
@@ -217,7 +217,7 @@ function renderHistory(listEl, items, onPick) {
 function bindSuggest(inputEl, boxEl, listEl, onPick) {
   const showHistory = () => {
     const h = getHistory();
-    if (h.length) renderHistory(listEl, h, onPick);
+    if (h.length) renderHistory(listEl, h, onPick, inputEl);
   };
 
   inputEl.addEventListener('focus', () => { if (!inputEl.value.trim()) showHistory(); });
