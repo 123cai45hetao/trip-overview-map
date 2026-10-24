@@ -699,9 +699,9 @@ async function applySmartSort() {
     }
   }
 
-  // 2) 按耗时矩阵求最优顺序（开放路径，不强制回酒店）
+  // 2) 按耗时矩阵求最优顺序（闭环：最后返回酒店）
   const pred = new Array(m).fill(0);
-  const order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, false) : solveGreedy(dur, pred, m - 1);
+  const order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, true) : solveGreedy(dur, pred, m - 1);
   state.spots = order.map((i) => state.spots[i]);
   state.activeSpotId = null;
   persist();
@@ -710,7 +710,7 @@ async function applySmartSort() {
   // 3) 画真实路线（直接用刚才缓存的折线，不再重复请求）
   clearRoute();
   let totalS = 0, anyStraight = false;
-  const seq = [pts[0], ...state.spots.map((s) => s.location)];
+  const seq = [pts[0], ...state.spots.map((s) => s.location), pts[0]]; // 闭环回到酒店
   for (let i = 0; i < seq.length - 1; i++) {
     const leg = getCachedLeg(state.travelMode, seq[i], seq[i + 1]);
     if (leg && leg.paths && leg.paths.length) {
