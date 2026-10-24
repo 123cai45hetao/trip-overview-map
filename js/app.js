@@ -403,8 +403,13 @@ async function fetchLeg(mode, from, to) {
     if (!services.transit) services.transit = new TMap.service.Transit();
     const res = await services.transit.search({ from: f, to: t });
     const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
-    const route = routes[0];
-    if (!route) throw new Error('未找到公交方案');
+    if (!routes.length) throw new Error('未找到公交方案');
+    // 地铁优先：返回的多个方案里优先挑含地铁线路的
+    const hasSubway = (r) => (r.steps || []).some((s) =>
+      s.mode === 'TRANSIT' && Array.isArray(s.lines) && s.lines[0] &&
+      (String(s.lines[0].vehicle || '').toUpperCase().includes('SUBWAY') || /地铁|轨道/.test(String(s.lines[0].title || '')))
+    );
+    const route = routes.find(hasSubway) || routes[0];
     const polys = [];
     (route.steps || []).forEach((step) => {
       if (step.mode === 'TRANSIT' && Array.isArray(step.lines) && step.lines[0]) {
