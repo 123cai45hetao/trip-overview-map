@@ -643,27 +643,98 @@ async function toggleRoute(id) {
   renderStats();
 }
 
-/* ─────────── 智能排序：带偏序约束的最短闭环（状压 DP / 贪心降级） ───────────
-   点 0 = 酒店（起点），1..n = 目的地。
-   pred[j]（可选）：游览 j 前必须先去过哪些点的位掩码（预留接口，默认全 0）。
-   n ≤ 12 用状态压缩 DP 求全局最优；n > 12 自动降级为贪心最近邻。 */
-function optimizeOrder(hotelLoc, spots) {
-  const n = spots.length;
-  const order = spots.map((_, i) => i + 1); // 默认原序（1..n）
-  if (n < 2) return order;
+/* ─────────── 智能排序：以真实交通耗时为权重 ───────────
+   1) 先两两获取酒店+景点之间的真实公交/地铁路线耗时，填入时间矩阵
+   2) 用状压 DP 求耗时最短的游览顺序（开放路径：酒店出发走完所有景点）
+   查不到公交方案的点对自动降级：步行耗时 → 直线估算 */
+const legCache = new Map();
+const legKey = (mode, a, b) =>
+  mode + '|' + a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 
-  const pts = [hotelLoc, ...spots.map((s) => s.location)];
-  const m = n + 1;
-  const dist = Array.from({ length: m }, (_, i) =>
-    Array.from({ length: m }, (_, j) => (i === j ? 0 : haversineKm(pts[i], pts[j])))
-  );
-  const pred = new Array(m).fill(0);
-
-  if (n <= 12) return solveDP(dist, pred, n);
-  return solveGreedy(dist, pred, n);
+async function fetchLegCached(mode, a, b) {
+  const k = legKey(mode, a, b);
+  if (legCache.has(k)) return legCache.get(k);
+  let v = null;
+  try { v = await fetchLeg(mode, a, b); } catch (err) { v = null; }
+  legCache.set(k, v);
+  return v;
 }
 
-function solveDP(dist, pred, n) {
+function getCachedLeg(mode, a, b) {
+  return legCache.get(legKey(mode, a, b)) || legCache.get(legKey(mode, b, a)) || null;
+}
+
+async function applySmartSort() {
+  if (!state.hotel || state.spots.length < 2) return;
+  const btn = $('sortBtn');
+  btn.disabled = true;
+
+  const pts = [state.hotel.location, ...state.spots.map((s) => s.location)];
+  const m = pts.length;
+  const pairs = (m * (m - 1)) / 2;
+  const dur = Array.from({ length: m }, () => new Array(m).fill(null));
+
+  // 1) 预取所有点对的真实交通耗时
+  let done = 0, estimated = false;
+  for (let i = 0; i < m; i++) {
+    for (let j = i + 1; j < m; j++) {
+      let d = null;
+      try {
+        const leg = await fetchLegCached(state.travelMode, pts[i], pts[j]);
+        if (leg) d = leg.duration;
+      } catch (_) { /* 忽略 */ }
+      if (d == null) {
+        try {
+          const w = await fetchLegCached('walk', pts[i], pts[j]);
+          if (w) d = w.duration * 1.3; // 公交换乘通常比纯步行慢，加权修正
+        } catch (_) { /* 忽略 */ }
+      }
+      if (d == null) {
+        d = (haversineKm(pts[i], pts[j]) / 4.8) * 3600; // 直线按 4.8km/h 估算
+        estimated = true;
+      }
+      dur[i][j] = dur[j][i] = d;
+      done++;
+      btn.textContent = `⏳ 获取真实交通耗时…（${done}/${pairs}）`;
+    }
+  }
+
+  // 2) 按耗时矩阵求最优顺序（开放路径，不强制回酒店）
+  const pred = new Array(m).fill(0);
+  const order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, false) : solveGreedy(dur, pred, m - 1);
+  state.spots = order.map((i) => state.spots[i]);
+  state.activeSpotId = null;
+  persist();
+  renderAll();
+
+  // 3) 画真实路线（直接用刚才缓存的折线，不再重复请求）
+  clearRoute();
+  let totalS = 0, anyStraight = false;
+  const seq = [pts[0], ...state.spots.map((s) => s.location)];
+  for (let i = 0; i < seq.length - 1; i++) {
+    const leg = getCachedLeg(state.travelMode, seq[i], seq[i + 1]);
+    if (leg && leg.paths && leg.paths.length) {
+      drawPaths(leg.paths);
+      totalS += leg.duration;
+    } else {
+      const w = getCachedLeg('walk', seq[i], seq[i + 1]);
+      if (w && w.paths && w.paths.length) {
+        drawPaths(w.paths);
+        totalS += w.duration * 1.3;
+      } else {
+        drawStraight(seq[i], seq[i + 1]);
+        totalS += (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
+      }
+      anyStraight = true;
+    }
+  }
+  renderStats();
+  btn.disabled = false;
+  btn.textContent = '🧭 智能排序 · 最短路线闭环';
+  showToast(`按真实交通排序：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${anyStraight || estimated ? '（含估算路段）' : ''}`);
+}
+
+function solveDP(dist, pred, n, closed = true) {
   const m = n + 1, FULL = (1 << m) - 1;
   const INF = Infinity;
   const size = 1 << m;
@@ -687,7 +758,7 @@ function solveDP(dist, pred, n) {
   let best = INF, last = -1;
   for (let i = 1; i < m; i++) {
     if (dp[FULL][i] === INF) continue;
-    const total = dp[FULL][i] + dist[i][0]; // 闭环：返回酒店
+    const total = dp[FULL][i] + (closed ? dist[i][0] : 0); // 闭环才加返回起点的路程
     if (total < best) { best = total; last = i; }
   }
 
@@ -737,23 +808,6 @@ function showToast(msg) {
   requestAnimationFrame(() => t.classList.add('show'));
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(() => t.classList.remove('show'), 2600);
-}
-
-async function applySmartSort() {
-  if (!state.hotel || state.spots.length < 2) return;
-  const btn = $('sortBtn');
-  btn.disabled = true;
-  btn.textContent = '⏳ 计算最优顺序…';
-  const order = optimizeOrder(state.hotel.location, state.spots);
-  state.spots = order.map((i) => state.spots[i]);
-  state.activeSpotId = null;
-  persist();
-  renderAll();
-  const { totalKm, totalMin, ok } = await drawFullRoute();
-  renderStats();
-  btn.disabled = false;
-  btn.textContent = '🧭 智能排序 · 最短路线闭环';
-  showToast(`闭环全程约 ${totalKm.toFixed(1)} km · ${modeLabel()}约 ${Math.max(1, totalMin)} 分钟${ok ? '' : '（部分路段为估算）'}`);
 }
 
 /* ─────────── 事件绑定 ─────────── */
