@@ -575,19 +575,18 @@ function renderList() {
   $('emptyHint').style.display = state.spots.length ? 'none' : '';
   ul.innerHTML = state.spots.map((s, i) => {
     const straight = state.hotel ? haversineKm(state.hotel.location, s.location) : null;
-    const winTxt = s.fixed ? ` 📌${fmtMin(s.fixed.arrive)}-${fmtMin(s.fixed.leave)}` : '';
+    const winTxt = s.fixed ? ` · 📌${fmtMin(s.fixed.arrive)}-${fmtMin(s.fixed.leave)}` : '';
     let distHtml;
     if (s.drive) {
-      distHtml = `<span class="spot-dist">🚗 ${(s.drive.distance / 1000).toFixed(1)} km · ${Math.round(s.drive.duration / 60)} 分钟${winTxt}</span>`;
+      distHtml = `🚗 ${(s.drive.distance / 1000).toFixed(1)} km · ${Math.round(s.drive.duration / 60)} 分钟${winTxt}`;
     } else if (straight != null) {
-      distHtml = `<span class="spot-dist">直线 ${straight.toFixed(1)} km${winTxt}</span>`;
+      distHtml = `直线 ${straight.toFixed(1)} km${winTxt}`;
     } else {
-      distHtml = `<span class="spot-dist">${winTxt}</span>`;
+      distHtml = winTxt ? winTxt.replace(' · ', '') : '';
     }
     return `<li class="spot-row ${state.activeSpotId === s.id ? 'active' : ''}" data-id="${s.id}">
       <span class="spot-idx">${i + 1}</span>
-      <div class="spot-main"><b>${esc(s.name)}</b><small>${esc(s.address || '')}</small></div>
-      ${distHtml}
+      <div class="spot-main"><b>${esc(s.name)}</b><small>${esc(s.address || '')}</small>${distHtml ? `<span class="spot-dist">${distHtml}</span>` : ''}</div>
       <div class="spot-acts">
         <button class="row-x act-time" title="设置可游玩时间段">⏰</button>
         <button class="row-x act-route" title="查看路线">🧭</button>
@@ -1080,6 +1079,27 @@ $('hotelClear').addEventListener('click', () => {
 });
 
 $('fitBtn').addEventListener('click', fitBounds);
+
+/* ── 手机版地图弹性占比：搜索时压到 1/6，点按钮在 默认/3/4 间切换 ── */
+let mapSizeTimer = null;
+function setMapSize(mode) { // 'min' | 'max' | null(默认)
+  document.body.classList.toggle('map-min', mode === 'min');
+  document.body.classList.toggle('map-max', mode === 'max');
+  $('mapSizeBtn').textContent = mode === 'max' ? '🗺 地图缩小' : '🗺 地图放大';
+  clearTimeout(mapSizeTimer);
+  mapSizeTimer = setTimeout(() => window.dispatchEvent(new Event('resize')), 330); // 让地图重算尺寸
+}
+$('mapSizeBtn').addEventListener('click', () => {
+  setMapSize(document.body.classList.contains('map-max') ? null : 'max');
+});
+['hotelInput', 'spotInput'].forEach((id) => {
+  const el = $(id);
+  el.addEventListener('focus', () => setMapSize('min'));
+  el.addEventListener('blur', () => setTimeout(() => {
+    const ae = document.activeElement;
+    if (ae !== $('hotelInput') && ae !== $('spotInput') && document.body.classList.contains('map-min')) setMapSize(null);
+  }, 260));
+});
 
 /* 路线显示开关：记住偏好，切换时只隐藏/重绘，不清掉已算好的路线 */
 const SHOW_ROUTE_KEY = 'trip-overview.show-route';
