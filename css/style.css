@@ -188,6 +188,26 @@ body {
 .iw b { font-size: 13px; color: var(--ink); }
 .iw span { font-size: 12px; color: var(--accent-deep); }
 
+/* 分段行程单 */
+.route-detail {
+  background: #fffdf8;
+  border: 1.5px solid var(--line);
+  border-radius: 11px;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.route-detail .rd-title {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--accent-deep);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.route-detail ol { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.route-detail li b { display: block; font-size: 13px; }
+.route-detail li small { display: block; font-size: 11.5px; color: var(--ink-soft); line-height: 1.6; }
+
 /* 智能排序按钮 */
 .btn-sort {
   width: 100%;

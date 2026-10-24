@@ -411,29 +411,35 @@ async function fetchLeg(mode, from, to) {
     );
     const route = routes.find(hasSubway) || routes[0];
     const polys = [];
+    const summary = [];
     (route.steps || []).forEach((step) => {
       if (step.mode === 'TRANSIT' && Array.isArray(step.lines) && step.lines[0]) {
         const p = decompressPolyline(step.lines[0].polyline); // 公交/地铁段取所选线路的折线
         if (p && p.length > 1) polys.push(p);
+        const l = step.lines[0];
+        const name = l.title || l.name || '公交';
+        const on = l.geton && l.geton.title, off = l.getoff && l.getoff.title;
+        summary.push(`${name}${on ? `（${on} → ${off || '?'}）` : ''}`);
       } else if (step.polyline) {
         const p = decompressPolyline(step.polyline); // 步行段
         if (p && p.length > 1) polys.push(p);
+        summary.push(`步行${Math.round(step.distance || 0)}米`);
       }
     });
-    return { distance: route.distance || 0, duration: (route.duration || 0) * 60, paths: polys }; // duration 官方单位为分钟
+    return { distance: route.distance || 0, duration: (route.duration || 0) * 60, paths: polys, summary }; // duration 官方单位为分钟
   }
 
   if (mode === 'walk') {
     if (!services.walk) services.walk = new TMap.service.Walking();
     const res = await services.walk.search({ from: f, to: t });
     const r = getFirstRoute(res);
-    return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+    return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean), summary: [`步行全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
   }
 
   if (!services.drive) services.drive = new TMap.service.Driving({ policy: 'LEAST_TIME' });
   const res = await services.drive.search({ from: f, to: t });
   const r = getFirstRoute(res);
-  return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+  return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean), summary: [`驾车全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
 }
 
 function modeLabel() {
@@ -606,6 +612,8 @@ function fitBounds() {
 function clearRoute() {
   if (state.routeLayer) state.routeLayer.setGeometries([]);
   if (state.infoWindow) state.infoWindow.close();
+  const box = $('routeDetail');
+  if (box) { box.hidden = true; box.innerHTML = ''; }
 }
 
 async function toggleRoute(id) {
@@ -731,6 +739,29 @@ async function applySmartSort() {
   renderStats();
   btn.disabled = false;
   btn.textContent = '🧭 智能排序 · 最短路线闭环';
+
+  // 分段行程单：每段的交通方式、上下车站、耗时
+  const box = $('routeDetail');
+  const rows = [];
+  for (let i = 0; i < seq.length - 1; i++) {
+    const fromName = i === 0 ? '🏨 酒店' : `${i}. ${state.spots[i - 1].name}`;
+    const toName = i + 1 < seq.length - 1 ? `${i + 1}. ${state.spots[i].name}` : '🏨 酒店';
+    let leg = getCachedLeg(state.travelMode, seq[i], seq[i + 1]);
+    let min, desc;
+    if (leg && leg.paths && leg.paths.length && leg.summary) {
+      min = leg.duration; desc = leg.summary.join(' → ');
+    } else {
+      const w = getCachedLeg('walk', seq[i], seq[i + 1]);
+      if (w && w.paths && w.paths.length && w.summary) {
+        min = w.duration * 1.3; desc = w.summary.join(' → ') + '（公交未查到，按步行）';
+      } else {
+        min = (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600; desc = '直线估算';
+      }
+    }
+    rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟 · ${esc(desc)}</small></li>`);
+  }
+  box.innerHTML = `<div class="rd-title">📋 行程方案（${modeLabel()} · 闭环全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟）</div><ol>${rows.join('')}</ol>`;
+  box.hidden = false;
   showToast(`按真实交通排序：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${anyStraight || estimated ? '（含估算路段）' : ''}`);
 }
 
