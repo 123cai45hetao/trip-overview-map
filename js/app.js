@@ -394,33 +394,33 @@ async function fetchLeg(from, to) {
   if (state.travelMode === 'transit') {
     if (!services.transit) services.transit = new TMap.service.Transit();
     const res = await services.transit.search({ from: f, to: t });
-    const plans = (res && res.result && res.result.plans) || (res && res.plans) || [];
-    const plan = plans[0];
-    if (!plan) throw new Error('未找到公交方案');
+    const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
+    const route = routes[0];
+    if (!route) throw new Error('未找到公交方案');
     const polys = [];
-    (plan.segments || plan.steps || []).forEach((seg) => {
-      ['walk', 'car', 'bus', 'railway', 'coach'].forEach((k) => {
-        const part = seg[k];
-        if (part && part.polyline) {
-          const p = decompressPolyline(part.polyline);
-          if (p && p.length > 1) polys.push(p);
-        }
-      });
+    (route.steps || []).forEach((step) => {
+      if (step.mode === 'TRANSIT' && Array.isArray(step.lines) && step.lines[0]) {
+        const p = decompressPolyline(step.lines[0].polyline); // 公交/地铁段取所选线路的折线
+        if (p && p.length > 1) polys.push(p);
+      } else if (step.polyline) {
+        const p = decompressPolyline(step.polyline); // 步行段
+        if (p && p.length > 1) polys.push(p);
+      }
     });
-    return { distance: plan.distance || 0, duration: plan.duration || 0, paths: polys };
+    return { distance: route.distance || 0, duration: (route.duration || 0) * 60, paths: polys }; // duration 官方单位为分钟
   }
 
   if (state.travelMode === 'walk') {
     if (!services.walk) services.walk = new TMap.service.Walking();
     const res = await services.walk.search({ from: f, to: t });
     const r = getFirstRoute(res);
-    return { distance: r.distance || 0, duration: r.duration || 0, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+    return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
   }
 
   if (!services.drive) services.drive = new TMap.service.Driving({ policy: 'LEAST_TIME' });
   const res = await services.drive.search({ from: f, to: t });
   const r = getFirstRoute(res);
-  return { distance: r.distance || 0, duration: r.duration || 0, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+  return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
 }
 
 function modeLabel() {
