@@ -1080,26 +1080,33 @@ $('hotelClear').addEventListener('click', () => {
 
 $('fitBtn').addEventListener('click', fitBounds);
 
-/* ── 手机版地图弹性占比：搜索时压到 1/6，点按钮在 默认/3/4 间切换 ── */
-let mapSizeTimer = null;
-function setMapSize(mode) { // 'min' | 'max' | null(默认)
-  document.body.classList.toggle('map-min', mode === 'min');
-  document.body.classList.toggle('map-max', mode === 'max');
-  $('mapSizeBtn').textContent = mode === 'max' ? '🗺 地图缩小' : '🗺 地图放大';
-  clearTimeout(mapSizeTimer);
-  mapSizeTimer = setTimeout(() => window.dispatchEvent(new Event('resize')), 330); // 让地图重算尺寸
+/* ── 手机版底部抽屉：下拉把手收起搜索面板看大地图，上拉展开 ── */
+let resizeTimer = null;
+function notifyMapResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => window.dispatchEvent(new Event('resize')), 330); // 让地图重算尺寸
 }
-$('mapSizeBtn').addEventListener('click', () => {
-  setMapSize(document.body.classList.contains('map-max') ? null : 'max');
-});
-['hotelInput', 'spotInput'].forEach((id) => {
-  const el = $(id);
-  el.addEventListener('focus', () => setMapSize('min'));
-  el.addEventListener('blur', () => setTimeout(() => {
-    const ae = document.activeElement;
-    if (ae !== $('hotelInput') && ae !== $('spotInput') && document.body.classList.contains('map-min')) setMapSize(null);
-  }, 260));
-});
+function setSheet(collapsed) {
+  $('panel').classList.toggle('collapsed', collapsed);
+  document.body.classList.toggle('sheet-down', collapsed);
+  $('sheetGripTxt').textContent = collapsed ? '▲ 上拉展开行程单' : '▼ 下拉收起，看大地图';
+  notifyMapResize();
+}
+$('sheetGrip').addEventListener('click', () => setSheet(!$('panel').classList.contains('collapsed')));
+// 把手拖拽：下拉 >40px 收起，上拉 >40px 展开
+(() => {
+  let startY = null;
+  const grip = $('sheetGrip');
+  grip.addEventListener('pointerdown', (e) => { startY = e.clientY; e.preventDefault(); });
+  grip.addEventListener('pointermove', (e) => {
+    if (startY === null) return;
+    const dy = e.clientY - startY;
+    if (dy > 40) { setSheet(true); startY = null; }
+    else if (dy < -40) { setSheet(false); startY = null; }
+  });
+  grip.addEventListener('pointerup', () => { startY = null; });
+  grip.addEventListener('pointercancel', () => { startY = null; });
+})();
 
 /* 路线显示开关：记住偏好，切换时只隐藏/重绘，不清掉已算好的路线 */
 const SHOW_ROUTE_KEY = 'trip-overview.show-route';
