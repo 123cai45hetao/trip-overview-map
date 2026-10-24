@@ -38,6 +38,9 @@ const ICON_SPOTS = Array.from({ length: MAX_SPOT_STYLES }, (_, i) =>
   svgUrl(`<text x="17" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#fffdf8">${i + 1}</text>`, '#22415e')
 );
 
+// 每段路线一种颜色，便于区分
+const ROUTE_COLORS = ['#22415e', '#d95d39', '#3e7a4e', '#7b4b94', '#b8860b', '#1f7a8c', '#8a3b5c', '#4a6d3f'];
+
 /* ─────────── 安全存储（localStorage 不可用时退化为内存） ─────────── */
 const memoryStore = {};
 const store = {
@@ -146,16 +149,16 @@ function initMap() {
 
   state.routeLayer = new TMap.MultiPolyline({
     map: state.map,
-    styles: {
-      drive: new TMap.PolylineStyle({
-        color: '#22415e', width: 6,
-        lineCap: 'round', arrow: true,
-      }),
-      fallback: new TMap.PolylineStyle({
-        color: '#8a8172', width: 4, dashArray: [10, 8],
-        lineCap: 'round',
-      }),
-    },
+    styles: (() => {
+      const styles = {
+        fallback: new TMap.PolylineStyle({ color: '#8a8172', width: 4, dashArray: [10, 8], lineCap: 'round' }),
+      };
+      ROUTE_COLORS.forEach((c, i) => {
+        styles['c' + i] = new TMap.PolylineStyle({ color: c, width: 6, lineCap: 'round', arrow: true });
+        styles['cd' + i] = new TMap.PolylineStyle({ color: c, width: 4, dashArray: [8, 8], lineCap: 'round' });
+      });
+      return styles;
+    })(),
     geometries: [],
   });
 
@@ -415,14 +418,14 @@ async function fetchLeg(mode, from, to) {
     (route.steps || []).forEach((step) => {
       if (step.mode === 'TRANSIT' && Array.isArray(step.lines) && step.lines[0]) {
         const p = decompressPolyline(step.lines[0].polyline); // 公交/地铁段取所选线路的折线
-        if (p && p.length > 1) polys.push(p);
+        if (p && p.length > 1) polys.push({ path: p, dashed: false });
         const l = step.lines[0];
         const name = l.title || l.name || '公交';
         const on = l.geton && l.geton.title, off = l.getoff && l.getoff.title;
         summary.push(`${name}${on ? `（${on} → ${off || '?'}）` : ''}`);
       } else if (step.polyline) {
         const p = decompressPolyline(step.polyline); // 步行段
-        if (p && p.length > 1) polys.push(p);
+        if (p && p.length > 1) polys.push({ path: p, dashed: true });
         summary.push(`步行${Math.round(step.distance || 0)}米`);
       }
     });
@@ -433,25 +436,34 @@ async function fetchLeg(mode, from, to) {
     if (!services.walk) services.walk = new TMap.service.Walking();
     const res = await services.walk.search({ from: f, to: t });
     const r = getFirstRoute(res);
-    return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean), summary: [`步行全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
+    const p = decompressPolyline(r.polyline);
+    return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: p ? [{ path: p, dashed: false }] : [], summary: [`步行全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
   }
 
   if (!services.drive) services.drive = new TMap.service.Driving({ policy: 'LEAST_TIME' });
   const res = await services.drive.search({ from: f, to: t });
   const r = getFirstRoute(res);
-  return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: [decompressPolyline(r.polyline)].filter(Boolean), summary: [`驾车全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
+  const p = decompressPolyline(r.polyline);
+  return { distance: r.distance || 0, duration: (r.duration || 0) * 60, paths: p ? [{ path: p, dashed: false }] : [], summary: [`驾车全程${((r.distance || 0) / 1000).toFixed(1)}公里`] };
 }
 
 function modeLabel() {
   return { transit: '公交地铁', walk: '步行', drive: '驾车' }[state.travelMode] || '';
 }
 
-function drawPaths(paths) {
+function drawPaths(paths, colorIdx = 0) {
   if (!state.map || !paths) return;
-  paths.forEach((p, i) => {
+  const ci = colorIdx % ROUTE_COLORS.length;
+  paths.forEach((seg, i) => {
+    const p = seg && seg.path ? seg.path : seg; // 兼容 {path,dashed} 与裸折线两种格式
+    const dashed = !!(seg && seg.dashed);
     const ll = p.map((pt) => (pt instanceof TMap.LatLng ? pt : new TMap.LatLng(pt.lat, pt.lng)));
     if (ll.length > 1) {
-      state.routeLayer.add({ id: 'leg-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1e4), styleId: 'drive', paths: ll });
+      state.routeLayer.add({
+        id: 'leg-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1e4),
+        styleId: (dashed ? 'cd' : 'c') + ci,
+        paths: ll,
+      });
     }
   });
 }
@@ -463,40 +475,6 @@ function drawStraight(a, b) {
     styleId: 'fallback',
     paths: [new TMap.LatLng(a.lat, a.lng), new TMap.LatLng(b.lat, b.lng)],
   });
-}
-
-/* 整条闭环（酒店→各目的地→酒店）逐段请求真实路线并绘制 */
-async function drawFullRoute() {
-  clearRoute();
-  if (!state.hotel || state.spots.length < 1) return { totalKm: 0, totalMin: 0, ok: true };
-  const seq = [state.hotel.location, ...state.spots.map((s) => s.location), state.hotel.location];
-  let totalM = 0, totalS = 0, ok = true;
-  for (let i = 0; i < seq.length - 1; i++) {
-    let done = false;
-    // 降级链：所选模式 → 步行 → 直线估算
-    for (const mode of [state.travelMode, 'walk']) {
-      try {
-        const leg = await fetchLeg(mode, seq[i], seq[i + 1]);
-        totalM += leg.distance;
-        totalS += leg.duration;
-        if (leg.paths && leg.paths.length) drawPaths(leg.paths);
-        else throw new Error('empty');
-        done = true;
-        break;
-      } catch (err) {
-        /* 尝试下一级 */
-      }
-    }
-    if (!done) {
-      console.warn('路段无法规划，按直线估算', seq[i], '→', seq[i + 1]);
-      ok = false;
-      drawStraight(seq[i], seq[i + 1]);
-      const d = haversineKm(seq[i], seq[i + 1]);
-      totalM += d * 1000;
-      totalS += (d / 4.8) * 3600; // 按 4.8km/h 步行估算
-    }
-  }
-  return { totalKm: totalM / 1000, totalMin: Math.round(totalS / 60), ok };
 }
 
 /* ─────────── 渲染 ─────────── */
@@ -631,12 +609,14 @@ async function toggleRoute(id) {
   renderList();
   showToast('路线计算中…');
   let done = false;
-  for (const mode of [state.travelMode, 'walk']) {
-    try {
-      const leg = await fetchLeg(mode, state.hotel.location, spot.location);
+  for (const mode of [state.travelMode, 'walk', 'drive']) {
+    const leg = await fetchLegCached(mode, state.hotel.location, spot.location);
+    if (leg && leg.paths && leg.paths.length) {
       spot.drive = { distance: leg.distance, duration: leg.duration };
-      if (leg.paths && leg.paths.length) { drawPaths(leg.paths); done = true; break; }
-    } catch (err) { /* 尝试下一级 */ }
+      drawPaths(leg.paths, 0);
+      done = true;
+      break;
+    }
   }
   if (!done) {
     const straight = haversineKm(state.hotel.location, spot.location);
@@ -644,6 +624,7 @@ async function toggleRoute(id) {
     drawStraight(state.hotel.location, spot.location);
     showToast('该路段未查到方案，已按直线估算');
   } else {
+    drawPaths(used0.paths, 0);
     showToast(`${modeLabel()} ${(spot.drive.distance / 1000).toFixed(1)} km · 约 ${Math.max(1, Math.round(spot.drive.duration / 60))} 分钟`);
   }
   persist();
@@ -662,10 +643,13 @@ const legKey = (mode, a, b) =>
 async function fetchLegCached(mode, a, b) {
   const k = legKey(mode, a, b);
   if (legCache.has(k)) return legCache.get(k);
-  let v = null;
-  try { v = await fetchLeg(mode, a, b); } catch (err) { v = null; }
-  legCache.set(k, v);
-  return v;
+  try {
+    const v = await fetchLeg(mode, a, b);
+    if (v) legCache.set(k, v); // 只缓存成功结果，失败的下次重试
+    return v;
+  } catch (err) {
+    return null;
+  }
 }
 
 function getCachedLeg(mode, a, b) {
@@ -715,24 +699,22 @@ async function applySmartSort() {
   persist();
   renderAll();
 
-  // 3) 画真实路线（直接用刚才缓存的折线，不再重复请求）
+  // 3) 画真实路线（优先用缓存，降级链：所选模式 → 步行 → 驾车 → 直线）
   clearRoute();
   let totalS = 0, anyStraight = false;
   const seq = [pts[0], ...state.spots.map((s) => s.location), pts[0]]; // 闭环回到酒店
   for (let i = 0; i < seq.length - 1; i++) {
-    const leg = getCachedLeg(state.travelMode, seq[i], seq[i + 1]);
-    if (leg && leg.paths && leg.paths.length) {
-      drawPaths(leg.paths);
-      totalS += leg.duration;
+    let used = null;
+    for (const mode of [state.travelMode, 'walk', 'drive']) {
+      const leg = await fetchLegCached(mode, seq[i], seq[i + 1]);
+      if (leg && leg.paths && leg.paths.length) { used = leg; break; }
+    }
+    if (used) {
+      drawPaths(used.paths, i);
+      totalS += used.duration;
     } else {
-      const w = getCachedLeg('walk', seq[i], seq[i + 1]);
-      if (w && w.paths && w.paths.length) {
-        drawPaths(w.paths);
-        totalS += w.duration * 1.3;
-      } else {
-        drawStraight(seq[i], seq[i + 1]);
-        totalS += (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
-      }
+      drawStraight(seq[i], seq[i + 1]);
+      totalS += (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
       anyStraight = true;
     }
   }
@@ -746,17 +728,19 @@ async function applySmartSort() {
   for (let i = 0; i < seq.length - 1; i++) {
     const fromName = i === 0 ? '🏨 酒店' : `${i}. ${state.spots[i - 1].name}`;
     const toName = i + 1 < seq.length - 1 ? `${i + 1}. ${state.spots[i].name}` : '🏨 酒店';
-    let leg = getCachedLeg(state.travelMode, seq[i], seq[i + 1]);
+    let used = null, usedMode = null;
+    for (const mode of [state.travelMode, 'walk', 'drive']) {
+      const leg = getCachedLeg(mode, seq[i], seq[i + 1]);
+      if (leg && leg.paths && leg.paths.length && leg.summary) { used = leg; usedMode = mode; break; }
+    }
     let min, desc;
-    if (leg && leg.paths && leg.paths.length && leg.summary) {
-      min = leg.duration; desc = leg.summary.join(' → ');
+    if (used) {
+      min = used.duration;
+      desc = used.summary.join(' → ');
+      if (usedMode !== state.travelMode) desc += `（公交未查到，按${usedMode === 'walk' ? '步行' : '驾车'}替代）`;
     } else {
-      const w = getCachedLeg('walk', seq[i], seq[i + 1]);
-      if (w && w.paths && w.paths.length && w.summary) {
-        min = w.duration * 1.3; desc = w.summary.join(' → ') + '（公交未查到，按步行）';
-      } else {
-        min = (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600; desc = '直线估算';
-      }
+      min = (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
+      desc = '直线估算';
     }
     rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟 · ${esc(desc)}</small></li>`);
   }
