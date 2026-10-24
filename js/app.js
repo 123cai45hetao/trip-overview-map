@@ -184,6 +184,19 @@ function pushHistory(place) {
   } catch (_) { /* 忽略 */ }
 }
 
+/* 下拉项点选手势：位移小于阈值才算点选，否则视为滚动 */
+function bindTapSelect(el, onPick) {
+  let startY = null;
+  el.addEventListener('pointerdown', (ev) => { startY = ev.clientY; });
+  el.addEventListener('pointercancel', () => { startY = null; });
+  el.addEventListener('pointerup', (ev) => {
+    if (startY === null) return;
+    const moved = Math.abs(ev.clientY - startY);
+    startY = null;
+    if (moved < 8) onPick(ev);
+  });
+}
+
 function renderHistory(listEl, items, onPick) {
   listEl.innerHTML = '<div class="suggest-item suggest-title"><small>最近使用</small></div>' +
     items.map((p, i) =>
@@ -191,8 +204,7 @@ function renderHistory(listEl, items, onPick) {
     ).join('');
   listEl.hidden = false;
   listEl.querySelectorAll('.suggest-item[data-i]').forEach((el) => {
-    el.addEventListener('pointerdown', (ev) => {
-      ev.preventDefault();
+    bindTapSelect(el, () => {
       const p = items[Number(el.dataset.i)];
       if (!p) return;
       listEl.hidden = true;
@@ -250,9 +262,7 @@ function bindSuggest(inputEl, boxEl, listEl, onPick) {
     ).join('');
     listEl.hidden = false;
     listEl.querySelectorAll('.suggest-item[data-i]').forEach((el) => {
-      // pointerdown 在触屏上比 mousedown 时序更稳，且先于 blur
-      el.addEventListener('pointerdown', (ev) => {
-        ev.preventDefault();
+      bindTapSelect(el, () => {
         const it = items[Number(el.dataset.i)];
         if (!it) return;
         listEl.hidden = true;
@@ -352,6 +362,7 @@ function renderAll() {
   $('mapEmpty').style.display = (state.hotel && state.map) ? 'none' : '';
   const hasAny = !!(state.hotel || state.spots.length);
   $('fitBtn').hidden = !hasAny;
+  $('sortBtn').hidden = !(state.hotel && state.spots.length >= 2);
 }
 
 function renderHotel() {
@@ -490,6 +501,119 @@ async function toggleRoute(id) {
   }
 }
 
+/* ─────────── 智能排序：带偏序约束的最短闭环（状压 DP / 贪心降级） ───────────
+   点 0 = 酒店（起点），1..n = 目的地。
+   pred[j]（可选）：游览 j 前必须先去过哪些点的位掩码（预留接口，默认全 0）。
+   n ≤ 12 用状态压缩 DP 求全局最优；n > 12 自动降级为贪心最近邻。 */
+function optimizeOrder(hotelLoc, spots) {
+  const n = spots.length;
+  const order = spots.map((_, i) => i + 1); // 默认原序（1..n）
+  if (n < 2) return order;
+
+  const pts = [hotelLoc, ...spots.map((s) => s.location)];
+  const m = n + 1;
+  const dist = Array.from({ length: m }, (_, i) =>
+    Array.from({ length: m }, (_, j) => (i === j ? 0 : haversineKm(pts[i], pts[j])))
+  );
+  const pred = new Array(m).fill(0);
+
+  if (n <= 12) return solveDP(dist, pred, n);
+  return solveGreedy(dist, pred, n);
+}
+
+function solveDP(dist, pred, n) {
+  const m = n + 1, FULL = (1 << m) - 1;
+  const INF = Infinity;
+  const size = 1 << m;
+  const dp = Array.from({ length: size }, () => new Array(m).fill(INF));
+  const parent = Array.from({ length: size }, () => new Array(m).fill(-1));
+  dp[1][0] = 0;
+
+  for (let mask = 1; mask <= FULL; mask++) {
+    for (let i = 0; i < m; i++) {
+      if (dp[mask][i] === INF || !(mask & (1 << i))) continue;
+      for (let j = 1; j < m; j++) {
+        if (mask & (1 << j)) continue;
+        if ((pred[j] & ~mask) !== 0) continue; // 前置点未全部去过
+        const nm = mask | (1 << j);
+        const nd = dp[mask][i] + dist[i][j];
+        if (nd < dp[nm][j]) { dp[nm][j] = nd; parent[nm][j] = i; }
+      }
+    }
+  }
+
+  let best = INF, last = -1;
+  for (let i = 1; i < m; i++) {
+    if (dp[FULL][i] === INF) continue;
+    const total = dp[FULL][i] + dist[i][0]; // 闭环：返回酒店
+    if (total < best) { best = total; last = i; }
+  }
+
+  const seq = [];
+  let cur = last, mask = FULL;
+  while (cur > 0) {
+    seq.push(cur - 1);
+    const prev = parent[mask][cur];
+    mask ^= (1 << cur);
+    cur = prev;
+  }
+  seq.reverse();
+  return seq;
+}
+
+function solveGreedy(dist, pred, n) {
+  const m = n + 1;
+  const visited = new Array(m).fill(false);
+  visited[0] = true;
+  const seq = [];
+  let cur = 0;
+  let mask = 1;
+  for (let step = 0; step < n; step++) {
+    let bestJ = -1, bestD = Infinity;
+    for (let j = 1; j < m; j++) {
+      if (visited[j] || (pred[j] & ~mask) !== 0) continue;
+      if (dist[cur][j] < bestD) { bestD = dist[cur][j]; bestJ = j; }
+    }
+    if (bestJ < 0) break;
+    visited[bestJ] = true;
+    mask |= (1 << bestJ);
+    seq.push(bestJ - 1);
+    cur = bestJ;
+  }
+  return seq;
+}
+
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  requestAnimationFrame(() => t.classList.add('show'));
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+function applySmartSort() {
+  if (!state.hotel || state.spots.length < 2) return;
+  const order = optimizeOrder(state.hotel.location, state.spots);
+  state.spots = order.map((i) => state.spots[i]);
+  state.activeSpotId = null;
+  clearRoute();
+  persist();
+  renderAll();
+  const total = state.spots.reduce(
+    (sum, s, i, arr) => sum + (i === 0
+      ? haversineKm(state.hotel.location, s.location)
+      : haversineKm(arr[i - 1].location, s.location)),
+    haversineKm(state.spots[state.spots.length - 1].location, state.hotel.location)
+  );
+  showToast(`已按最短路线排序：闭环全程约 ${total.toFixed(1)} km`);
+}
+
 /* ─────────── 事件绑定 ─────────── */
 bindSuggest($('hotelInput'), $('hotelBox'), $('hotelSuggest'), setHotel);
 bindSuggest($('spotInput'), $('spotBox'), $('spotSuggest'), addSpot);
@@ -504,6 +628,8 @@ $('hotelClear').addEventListener('click', () => {
 });
 
 $('fitBtn').addEventListener('click', fitBounds);
+
+$('sortBtn').addEventListener('click', applySmartSort);
 
 $('sheetToggle').addEventListener('click', () => {
   $('panel').classList.toggle('collapsed');
