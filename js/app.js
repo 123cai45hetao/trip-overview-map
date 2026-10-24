@@ -890,21 +890,57 @@ function fmtMin(v) {
   return `${String(Math.floor(((v % 1440) + 1440) % 1440 / 60)).padStart(2, '0')}:${String(Math.round(v) % 60).padStart(2, '0')}`;
 }
 
+/* 宽松解析时间段：接受 13:00-15:00 / 13点-15点 / 13:00 到 15:00 / 13-15 /
+   下午1点到3点 / 1:30pm-3pm / １３：００～１５：００ 等写法，返回 [arrive, leave] 分钟 */
+function parseTimeRange(raw) {
+  let t = String(raw)
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)) // 全角数字
+    .replace(/：/g, ':')
+    .replace(/．|。/g, '.')
+    .replace(/点半|点半钟/g, ':30')
+    .replace(/半/g, ':30')
+    .replace(/点|時|时/g, ':')
+    .replace(/分/g, '')
+    .replace(/～|~|—|–|─|―|－|至|到|between|-/gi, '-')
+    .replace(/上午|am?(?=\d)/gi, (s) => (s.toLowerCase() === 'am' ? 'AM' : s))
+    .replace(/\s+/g, '');
+  // 上午/下午/晚上/中午/早上 → 12 小时制换算
+  let pmOffset = 0;
+  if (/下午|傍晚|晚上|PM/i.test(t)) pmOffset = 720;
+  else if (/中午/.test(t)) pmOffset = 0;
+  t = t.replace(/早上|上午|中午|下午|傍晚|晚上|AM|PM/gi, '');
+  const times = t.split('-').filter(Boolean);
+  if (times.length !== 2) return null;
+  const parseOne = (str) => {
+    let mm = str.match(/^(\d{1,2})(?::(\d{1,2})?)?(?::\d{1,2})?\.?$/); // 13 / 13: / 13:30 / 13:30:00 / 13.30
+    if (!mm) return null;
+    const h = +mm[1], mi = +(mm[2] || 0);
+    if (h > 24 || mi > 59) return null;
+    let v = h * 60 + mi + pmOffset;
+    // 下午3点=15:00，但"下午12点"仍算 12:00
+    if (pmOffset && h < 12) v = h * 60 + mi + 720;
+    return ((v % 1440) + 1440) % 1440;
+  };
+  const arrive = parseOne(times[0]);
+  const leave = parseOne(times[1]);
+  if (arrive == null || leave == null) return null;
+  return [arrive, leave];
+}
+
 function editTimeWindow(id) {
   const s = state.spots.find((x) => x.id === id);
   if (!s) return;
   const cur = s.fixed ? `${fmtMin(s.fixed.arrive)}-${fmtMin(s.fixed.leave)}` : '';
-  const input = prompt(`「${s.name}」的到达和离开时间\n格式：13:00-15:00（24 小时制，留空清除）\n排序时保证 13:00 到达、15:00 离开`, cur);
+  const input = prompt(`「${s.name}」的到达和离开时间\n格式随意，例如：13:00-15:00、13点-15点、13:00 到 15:00（留空清除）\n排序时保证 13:00 到达、15:00 离开`, cur);
   if (input === null) return;
   const t = input.trim();
   if (!t) {
     s.fixed = null;
   } else {
-    const m = t.match(/^(\d{1,2}):(\d{2})\s*[-—~至]\s*(\d{1,2}):(\d{2})$/);
-    if (!m) { alert('格式不对，示例：13:00-15:00'); return; }
-    const arrive = (+m[1]) * 60 + (+m[2]);
-    const leave = (+m[3]) * 60 + (+m[4]);
-    if (leave <= arrive) { alert('离开时间要晚于到达时间'); return; }
+    const parsed = parseTimeRange(t);
+    if (!parsed) { alert('没认出来，示例：13:00-15:00 或 13点-15点'); return; }
+    const arrive = parsed[0], leave = parsed[1];
+    if (parsed[1] <= parsed[0]) { alert('离开时间要晚于到达时间'); return; }
     s.fixed = { arrive, leave };
   }
   persist();
