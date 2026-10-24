@@ -16,6 +16,9 @@ const state = {
   markerLayer: null,
   lineLayer: null,
   routeLayer: null,
+  labelLayer: null,   // 路线分段编号图层
+  routeGeoms: [],     // 最近一次画出的路线几何（供开关重绘）
+  showRoute: true,    // 是否在地图上显示路线
   activeSpotId: null,
   sdkReady: false,
   travelMode: 'transit', // transit（地铁+步行）/ walk / drive
@@ -40,6 +43,16 @@ const ICON_SPOTS = Array.from({ length: MAX_SPOT_STYLES }, (_, i) =>
 
 // 每段路线一种颜色，便于区分
 const ROUTE_COLORS = ['#22415e', '#d95d39', '#3e7a4e', '#7b4b94', '#b8860b', '#1f7a8c', '#8a3b5c', '#4a6d3f'];
+
+// 路线分段编号小圆点（颜色与该段路线一致，标在路段中点）
+const circleUrl = (n, bg) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="10.5" fill="${bg}" stroke="#fffdf8" stroke-width="2"/>
+    <text x="12" y="16" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#fffdf8">${n}</text>
+  </svg>`
+);
+const MAX_LEG_STYLES = 50;
+const ICON_LEGS = Array.from({ length: MAX_LEG_STYLES }, (_, i) => circleUrl(i + 1, ROUTE_COLORS[i % ROUTE_COLORS.length]));
 
 /* ─────────── 安全存储（localStorage 不可用时退化为内存） ─────────── */
 const memoryStore = {};
@@ -161,6 +174,12 @@ function initMap() {
     })(),
     geometries: [],
   });
+
+  const legStyles = {};
+  for (let i = 0; i < MAX_LEG_STYLES; i++) {
+    legStyles['leg-' + i] = new TMap.MarkerStyle({ width: 24, height: 24, anchor: { x: 12, y: 12 }, src: ICON_LEGS[i] });
+  }
+  state.labelLayer = new TMap.MultiMarker({ map: state.map, styles: legStyles, geometries: [] });
 
   state.markerLayer.on('click', (e) => {
     const id = e.geometry && e.geometry.id;
@@ -477,30 +496,54 @@ function modeLabel() {
   return { transit: '公交地铁', walk: '步行', drive: '驾车' }[state.travelMode] || '';
 }
 
-function drawPaths(paths, colorIdx = 0) {
+function drawPaths(paths, colorIdx = 0, seq = null) {
   if (!state.map || !paths) return;
   const ci = colorIdx % ROUTE_COLORS.length;
+  let longest = null; // 用于放编号标记：取最长一段折线的中点
   paths.forEach((seg, i) => {
     const p = seg && seg.path ? seg.path : seg; // 兼容 {path,dashed} 与裸折线两种格式
     const dashed = !!(seg && seg.dashed);
     const ll = p.map((pt) => (pt instanceof TMap.LatLng ? pt : new TMap.LatLng(pt.lat, pt.lng)));
     if (ll.length > 1) {
-      state.routeLayer.add({
-        id: 'leg-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1e4),
-        styleId: (dashed ? 'cd' : 'c') + ci,
-        paths: ll,
-      });
+      state.routeGeoms.push({ type: 'path', styleId: (dashed ? 'cd' : 'c') + ci, paths: ll });
+      if (!dashed && (!longest || ll.length > longest.length)) longest = ll;
     }
   });
+  if (seq != null && longest) {
+    const mid = longest[Math.floor(longest.length / 2)];
+    state.routeGeoms.push({ type: 'label', seq, lat: mid.lat, lng: mid.lng });
+  }
+  renderRouteGeoms();
 }
 
-function drawStraight(a, b) {
+function drawStraight(a, b, seq = null) {
   if (!state.map) return;
-  state.routeLayer.add({
-    id: 'straight-' + Date.now(),
-    styleId: 'fallback',
+  state.routeGeoms.push({
+    type: 'path', styleId: 'fallback',
     paths: [new TMap.LatLng(a.lat, a.lng), new TMap.LatLng(b.lat, b.lng)],
   });
+  if (seq != null) {
+    state.routeGeoms.push({ type: 'label', seq, lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 });
+  }
+  renderRouteGeoms();
+}
+
+/* 按开关状态重绘路线与编号（关闭开关只隐藏，不清空记录） */
+function renderRouteGeoms() {
+  if (!state.routeLayer) return;
+  state.routeLayer.setGeometries([]);
+  if (state.labelLayer) state.labelLayer.setGeometries([]);
+  if (!state.showRoute) return;
+  const polys = [], labels = [];
+  state.routeGeoms.forEach((g, i) => {
+    if (g.type === 'path') {
+      polys.push({ id: 'rg-' + i, styleId: g.styleId, paths: g.paths });
+    } else if (g.type === 'label' && g.seq <= MAX_LEG_STYLES) {
+      labels.push({ id: 'lg-' + i, styleId: 'leg-' + (g.seq - 1), position: new TMap.LatLng(g.lat, g.lng) });
+    }
+  });
+  state.routeLayer.add(polys);
+  if (state.labelLayer && labels.length) state.labelLayer.add(labels);
 }
 
 /* ─────────── 渲染 ─────────── */
@@ -515,6 +558,7 @@ function renderAll() {
   $('fitBtn').hidden = !hasAny;
   $('sortBtn').hidden = !(state.hotel && state.spots.length >= 2);
   $('departRow').hidden = !(state.hotel && state.spots.length >= 2);
+  $('routeToggleWrap').hidden = !(state.hotel && state.spots.length >= 2);
   $('modeTabs').hidden = !(state.hotel && state.spots.length >= 1);
 }
 
@@ -618,7 +662,9 @@ function fitBounds() {
 
 /* ─────────── 驾车路线 ─────────── */
 function clearRoute() {
+  state.routeGeoms = [];
   if (state.routeLayer) state.routeLayer.setGeometries([]);
+  if (state.labelLayer) state.labelLayer.setGeometries([]);
   if (state.infoWindow) state.infoWindow.close();
   const box = $('routeDetail');
   if (box) { box.hidden = true; box.innerHTML = ''; }
@@ -654,7 +700,6 @@ async function toggleRoute(id) {
     drawStraight(state.hotel.location, spot.location);
     showToast('该路段未查到方案，已按直线估算');
   } else {
-    drawPaths(used0.paths, 0);
     showToast(`${modeLabel()} ${(spot.drive.distance / 1000).toFixed(1)} km · 约 ${Math.max(1, Math.round(spot.drive.duration / 60))} 分钟`);
   }
   persist();
@@ -762,10 +807,10 @@ async function applySmartSort() {
       if (leg && leg.paths && leg.paths.length) { used = leg; break; }
     }
     if (used) {
-      drawPaths(used.paths, i);
+      drawPaths(used.paths, i, i + 1);
       totalS += used.duration;
     } else {
-      drawStraight(seq[i], seq[i + 1]);
+      drawStraight(seq[i], seq[i + 1], i + 1);
       totalS += (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
       anyStraight = true;
     }
@@ -1023,6 +1068,17 @@ $('hotelClear').addEventListener('click', () => {
 });
 
 $('fitBtn').addEventListener('click', fitBounds);
+
+/* 路线显示开关：记住偏好，切换时只隐藏/重绘，不清掉已算好的路线 */
+const SHOW_ROUTE_KEY = 'trip-overview.show-route';
+state.showRoute = store.get(SHOW_ROUTE_KEY) !== '0';
+$('routeToggle').checked = state.showRoute;
+$('routeToggle').addEventListener('change', (e) => {
+  state.showRoute = e.target.checked;
+  store.set(SHOW_ROUTE_KEY, state.showRoute ? '1' : '0');
+  renderRouteGeoms();
+  showToast(state.showRoute ? '已显示路线' : '已隐藏路线（排序结果保留）');
+});
 
 $('sortBtn').addEventListener('click', applySmartSort);
 

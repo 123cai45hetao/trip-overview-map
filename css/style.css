@@ -236,6 +236,16 @@ body {
 }
 .btn-sort:hover { background: rgba(34, 65, 94, .07); }
 
+/* 路线显示开关 */
+.route-toggle {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--ink-soft);
+  padding: 2px 2px 0;
+  cursor: pointer; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.route-toggle input { width: 16px; height: 16px; accent-color: var(--navy); cursor: pointer; }
+
 /* 轻提示 */
 .toast {
   position: fixed;
