@@ -395,9 +395,34 @@ function decompressPolyline(coords) {
   return out;
 }
 
+/* 深度递归提取返回结果中的所有折线字段：
+   不管藏在 steps / lines / walks 哪一层，字段名是 polyline / coors / coordinates 都能挖到。
+   数字串=压缩坐标自动解压；对象数组=已解压坐标直接用。 */
+function collectPolylines(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    if (node.length > 1 && typeof node[0] === 'number') {
+      const p = decompressPolyline(node);
+      if (p && p.length > 1) out.push({ path: p, dashed: false });
+      return; // 坐标串不再往下递归
+    }
+    node.forEach((n) => collectPolylines(n, out));
+    return;
+  }
+  const walking = String(node.mode || '') === 'WALKING';
+  Object.keys(node).forEach((k) => {
+    if (k === 'polyline' || k === 'coors' || k === 'coordinates' || k === 'polylines') {
+      const p = decompressPolyline(node[k]);
+      if (p && p.length > 1) out.push({ path: p, dashed: walking });
+    } else {
+      collectPolylines(node[k], out);
+    }
+  });
+}
+
 /* 按指定出行方式请求两点间真实路线：
    transit（地铁+步行）/ walk（步行）/ drive（驾车）
-   返回 { distance(米), duration(秒), paths: [每段一条折线] } */
+   返回 { distance(米), duration(秒), paths: [每段一条折线], summary: [描述] } */
 async function fetchLeg(mode, from, to) {
   const f = new TMap.LatLng(from.lat, from.lng);
   const t = new TMap.LatLng(to.lat, to.lng);
@@ -414,6 +439,7 @@ async function fetchLeg(mode, from, to) {
     );
     const route = routes.find(hasSubway) || routes[0];
     const polys = [];
+    collectPolylines(route, polys); // 深度提取所有步行+公交折线
     const summary = [];
     (route.steps || []).forEach((step) => {
       if (step.mode === 'TRANSIT' && Array.isArray(step.lines) && step.lines[0]) {
