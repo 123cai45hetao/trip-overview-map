@@ -531,14 +531,14 @@ function renderList() {
   $('emptyHint').style.display = state.spots.length ? 'none' : '';
   ul.innerHTML = state.spots.map((s, i) => {
     const straight = state.hotel ? haversineKm(state.hotel.location, s.location) : null;
-    const winTxt = s.window ? ` ⏰${fmtMin(s.window.open)}-${fmtMin(s.window.close)}` : '';
+    const winTxt = s.fixed ? ` 📌${fmtMin(s.fixed.arrive)}-${fmtMin(s.fixed.leave)}` : '';
     let distHtml;
     if (s.drive) {
       distHtml = `<span class="spot-dist">🚗 ${(s.drive.distance / 1000).toFixed(1)} km · ${Math.round(s.drive.duration / 60)} 分钟${winTxt}</span>`;
     } else if (straight != null) {
       distHtml = `<span class="spot-dist">直线 ${straight.toFixed(1)} km${winTxt}</span>`;
     } else {
-      distHtml = `<span class="spot-dist${s.window ? '' : ''}">${winTxt}</span>`;
+      distHtml = `<span class="spot-dist">${winTxt}</span>`;
     }
     return `<li class="spot-row ${state.activeSpotId === s.id ? 'active' : ''}" data-id="${s.id}">
       <span class="spot-idx">${i + 1}</span>
@@ -729,21 +729,24 @@ async function applySmartSort() {
     }
   }
 
-  // 2) 按耗时矩阵求最优顺序（闭环返回酒店；带时间窗时用时间窗 DP）
+  // 2) 锚点排程：优先满足锚点时间约束，无解则回退纯耗时最优
   const depart = (() => {
     const v = $('departTime').value || '09:00';
     const p = v.split(':');
     return (+p[0]) * 60 + (+p[1]);
   })();
-  const wins = [null, ...state.spots.map((s) => s.window || null)];
+  const meta = [null, ...state.spots];
   const durM = dur.map((row) => row.map((v) => v / 60));
-  let winOk = true;
-  let order = (m - 1) <= 12 ? solveDPTime(durM, wins, depart, m - 1, true) : null;
-  if (!order) {
-    if (state.spots.some((s) => s.window)) winOk = false; // 时间窗无法全部满足，退回纯耗时最优
-    order = (m - 1) <= 12 ? solveDP(dur, pred, m - 1, true) : solveGreedy(dur, pred, m - 1);
+  let anchorOk = true, times = null;
+  let order = (m - 1) <= 12 ? solveAnchors(durM, meta, depart, m - 1, true) : null;
+  if (order) {
+    times = order.times;
+  } else {
+    if (state.spots.some((s) => s.fixed)) anchorOk = false; // 锚点约束塞不下，回退纯耗时最优
+    const pred = new Array(m).fill(0);
+    order = { seq: (m - 1) <= 12 ? solveDP(dur, pred, m - 1, true) : solveGreedy(dur, pred, m - 1) };
   }
-  state.spots = order.map((i) => state.spots[i]);
+  state.spots = order.seq.map((i) => state.spots[i]);
   state.activeSpotId = null;
   persist();
   renderAll();
@@ -769,35 +772,42 @@ async function applySmartSort() {
   }
   renderStats();
   btn.disabled = false;
-  btn.textContent = '🧭 智能排序 · 最短路线闭环';
+  btn.textContent = '🧭 智能排序 · 最省时路线';
 
-  // 分段行程单：每段的交通方式、上下车站、耗时、预计到达时刻
+  // 分段行程单：仅显示交通耗时与到达/离开时刻（不展示地铁/公交细节）
   const box = $('routeDetail');
   const rows = [];
-  let arr = depart;
   for (let i = 0; i < seq.length - 1; i++) {
     const fromName = i === 0 ? '🏨 酒店' : `${i}. ${state.spots[i - 1].name}`;
     const toName = i + 1 < seq.length - 1 ? `${i + 1}. ${state.spots[i].name}` : '🏨 酒店';
     let used = null, usedMode = null;
     for (const mode of [state.travelMode, 'walk', 'drive']) {
       const leg = getCachedLeg(mode, seq[i], seq[i + 1]);
-      if (leg && leg.paths && leg.paths.length && leg.summary) { used = leg; usedMode = mode; break; }
+      if (leg && leg.paths && leg.paths.length) { used = leg; usedMode = mode; break; }
     }
-    let min, desc;
+    let min, sub;
     if (used) {
       min = used.duration;
-      desc = used.summary.join(' → ');
-      if (usedMode !== state.travelMode) desc += `（公交未查到，按${usedMode === 'walk' ? '步行' : '驾车'}替代）`;
+      sub = usedMode !== state.travelMode ? `（按${usedMode === 'walk' ? '步行' : '驾车'}估算）` : '';
     } else {
       min = (haversineKm(seq[i], seq[i + 1]) / 4.8) * 3600;
-      desc = '直线估算';
+      sub = '（直线估算）';
     }
-    arr += min;
-    rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟 · 预计 ${fmtMin(arr)} 到达 · ${esc(desc)}</small></li>`);
+    let arriveTxt;
+    if (times && i < times.length) {
+      arriveTxt = `预计 ${fmtMin(times[i].arrive)} 到达 · ${fmtMin(times[i].depart)} 离开`;
+      if (times[i].wait > 0.5) arriveTxt += ` · 等待 ${Math.round(times[i].wait)} 分钟`;
+    } else {
+      // 无 times（回退方案）：按交通耗时 + 1 小时游玩累计到达/离开时刻
+      let acc = depart;
+      for (let k = 0; k < i; k++) acc += dur[k][k + 1] / 60 + STAY_MIN;
+      arriveTxt = `预计 ${fmtMin(acc + dur[i][i + 1] / 60)} 到达${i + 1 < seq.length - 1 ? ` · ${fmtMin(acc + dur[i][i + 1] / 60 + STAY_MIN)} 离开` : ''}`;
+    }
+    rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟${sub} · ${arriveTxt}</small></li>`);
   }
   box.innerHTML = `<div class="rd-title">📋 行程方案（${modeLabel()} · 闭环全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟）</div><ol>${rows.join('')}</ol>`;
   box.hidden = false;
-  showToast(`按真实交通排序：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${winOk ? '' : ' ⚠ 时间窗无法全部满足'}${anyStraight || estimated ? '（含估算路段）' : ''}`);
+  showToast(`排序完成：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${anchorOk ? '' : ' ⚠ 锚点时间约束无法满足，已按最省时排序'}${anyStraight || estimated ? '（含估算路段）' : ''}`);
 }
 
 function solveDP(dist, pred, n, closed = true) {
@@ -883,59 +893,84 @@ function fmtMin(v) {
 function editTimeWindow(id) {
   const s = state.spots.find((x) => x.id === id);
   if (!s) return;
-  const cur = s.window ? `${fmtMin(s.window.open)}-${fmtMin(s.window.close)}` : '';
-  const input = prompt(`「${s.name}」的可游玩时间段\n格式：9:00-11:30（24 小时制，留空清除限制）\n排序时会保证在这个时间段内到达`, cur);
+  const cur = s.fixed ? `${fmtMin(s.fixed.arrive)}-${fmtMin(s.fixed.leave)}` : '';
+  const input = prompt(`「${s.name}」的到达和离开时间\n格式：13:00-15:00（24 小时制，留空清除）\n排序时保证 13:00 到达、15:00 离开`, cur);
   if (input === null) return;
   const t = input.trim();
   if (!t) {
-    s.window = null;
+    s.fixed = null;
   } else {
     const m = t.match(/^(\d{1,2}):(\d{2})\s*[-—~至]\s*(\d{1,2}):(\d{2})$/);
-    if (!m) { alert('格式不对，示例：9:00-11:30'); return; }
-    const open = (+m[1]) * 60 + (+m[2]);
-    const close = (+m[3]) * 60 + (+m[4]);
-    if (close <= open) { alert('结束时间要晚于开始时间'); return; }
-    s.window = { open, close };
+    if (!m) { alert('格式不对，示例：13:00-15:00'); return; }
+    const arrive = (+m[1]) * 60 + (+m[2]);
+    const leave = (+m[3]) * 60 + (+m[4]);
+    if (leave <= arrive) { alert('离开时间要晚于到达时间'); return; }
+    s.fixed = { arrive, leave };
   }
   persist();
   renderList();
-  showToast('时间窗已保存，请重新点「智能排序」生效');
+  showToast('时间已保存，请重新点「智能排序」生效');
 }
 
-/* 带时间窗的 DP：到达时刻超出景点时间窗的走法直接剪枝 */
-function solveDPTime(durM, wins, depart, n, closed) {
+const STAY_MIN = 60; // 未设时间的景点默认游玩时长（分钟）
+
+/* 锚点排程 DP：
+   - 设了到达/离开时间的景点是锚点：到达不得晚于约定到达时刻（可早到等待），
+     按约定离开时刻离开；约定之间的空隙必须容得下中间景点（交通+1小时游玩）
+   - 未设时间的景点：到达后游玩 STAY_MIN 分钟
+   - DP 状态 = (已去过的景点集合, 当前所在景点)，值 = 最早离开时刻（可证贪心最优） */
+function solveAnchors(durM, meta, depart, n, closed) {
   const m = n + 1, FULL = (1 << m) - 1, INF = Infinity;
-  const dpT = Array.from({ length: 1 << m }, () => new Array(m).fill(INF)); // 交通累计(分钟)
-  const dpA = Array.from({ length: 1 << m }, () => new Array(m).fill(INF)); // 实际时刻(分钟)
-  const parent = Array.from({ length: 1 << m }, () => new Array(m).fill(-1));
-  dpT[1][0] = 0;
-  dpA[1][0] = depart;
+  const size = 1 << m;
+  const dp = Array.from({ length: size }, () => new Array(m).fill(INF));
+  const parent = Array.from({ length: size }, () => new Array(m).fill(-1));
+  dp[1][0] = depart;
   for (let mask = 1; mask <= FULL; mask++) {
     for (let i = 0; i < m; i++) {
-      if (dpT[mask][i] === INF) continue;
+      if (dp[mask][i] === INF || !(mask & (1 << i))) continue;
       for (let j = 1; j < m; j++) {
         if (mask & (1 << j)) continue;
-        const arrive = dpA[mask][i] + durM[i][j];
-        const w = wins[j];
-        if (w && arrive > w.close) continue;          // 赶不上时间窗，此路不通
-        const start = w ? Math.max(arrive, w.open) : arrive; // 早到则在景点等待开门
+        const arrive = dp[mask][i] + durM[i][j];
+        const fx = meta[j] && meta[j].fixed;
+        let departJ;
+        if (fx) {
+          if (arrive > fx.arrive) continue; // 赶不上约定的到达时间，此路不通
+          departJ = fx.leave;
+        } else {
+          departJ = arrive + STAY_MIN;
+        }
         const nm = mask | (1 << j);
-        const nt = dpT[mask][i] + durM[i][j];
-        if (nt < dpT[nm][j]) { dpT[nm][j] = nt; dpA[nm][j] = start; parent[nm][j] = i; }
+        if (departJ < dp[nm][j]) { dp[nm][j] = departJ; parent[nm][j] = i; }
       }
     }
   }
   let best = INF, last = -1;
   for (let i = 1; i < m; i++) {
-    if (dpT[FULL][i] === INF) continue;
-    const total = dpT[FULL][i] + (closed ? durM[i][0] : 0);
-    if (total < best) { best = total; last = i; }
+    if (dp[FULL][i] === INF) continue;
+    const end = dp[FULL][i] + (closed ? durM[i][0] : 0);
+    if (end < best) { best = end; last = i; }
   }
-  if (last < 0) return null; // 时间窗无法全部满足
+  if (last < 0) return null; // 无解
   const seq = [];
   let cur = last, mask = FULL;
   while (cur > 0) { seq.push(cur - 1); const p = parent[mask][cur]; mask ^= (1 << cur); cur = p; }
-  return seq.reverse();
+  seq.reverse();
+
+  // 按顺序模拟出每个点的到达/离开时刻
+  const times = [];
+  let clock = depart;
+  let prev = 0;
+  seq.forEach((spotIdx) => {
+    const pi = prev + 1, ci = spotIdx + 1;
+    const raw = clock + durM[pi][ci];
+    const fx = meta[ci] && meta[ci].fixed;
+    const arrive = fx ? fx.arrive : raw;
+    const dep = fx ? fx.leave : arrive + STAY_MIN;
+    times.push({ arrive, depart: dep, wait: arrive - raw });
+    clock = dep;
+    prev = spotIdx;
+  });
+  return { seq, times };
 }
 
 /* ─────────── 事件绑定 ─────────── */
