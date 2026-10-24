@@ -18,6 +18,7 @@ const state = {
   routeLayer: null,
   activeSpotId: null,
   sdkReady: false,
+  travelMode: 'transit', // transit（地铁+步行）/ walk / drive
 };
 
 const $ = (id) => document.getElementById(id);
@@ -150,17 +151,55 @@ function initMap() {
         color: '#22415e', width: 6,
         lineCap: 'round', arrow: true,
       }),
+      fallback: new TMap.PolylineStyle({
+        color: '#8a8172', width: 4, dashArray: [10, 8],
+        lineCap: 'round',
+      }),
     },
     geometries: [],
   });
 
+  state.infoWindow = new TMap.InfoWindow({
+    map: state.map,
+    position: new TMap.LatLng(22.5405, 114.0586),
+    offset: { x: 0, y: -46 },
+    content: '',
+    enableCustom: true,
+  });
+
   state.markerLayer.on('click', (e) => {
     const id = e.geometry && e.geometry.id;
-    if (id && String(id).startsWith('spot-')) {
-      state.activeSpotId = String(id).slice(5);
+    if (!id) return;
+    if (id === 'hotel') {
+      state.activeSpotId = null;
+      clearRoute();
+      focusMarker(state.hotel.location, 13);
+      state.infoWindow.close();
       renderList();
+      return;
     }
+    const sid = String(id).slice(5);
+    const s = state.spots.find((x) => x.id === sid);
+    if (!s) return;
+    state.activeSpotId = sid;
+    focusMarker(s.location, 15);
+    const straight = haversineKm(state.hotel.location, s.location);
+    let html = `<b>${esc(s.name)}</b><span>距酒店 直线 ${straight.toFixed(1)} km`;
+    if (s.drive) html += ` · ${modeLabel()}约 ${Math.max(1, Math.round(s.drive.duration / 60))} 分钟`;
+    html += '</span>';
+    state.infoWindow.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
+    state.infoWindow.setContent(`<div class="iw">${html}</div>`);
+    state.infoWindow.open();
+    renderList();
   });
+
+  state.map.on('click', () => state.infoWindow && state.infoWindow.close());
+}
+
+function focusMarker(loc, zoom) {
+  if (!state.map) return;
+  state.map.setZoom(zoom);
+  state.map.panTo(new TMap.LatLng(loc.lat, loc.lng));
 }
 
 /* ─────────── 搜索联想 ─────────── */
@@ -327,7 +366,13 @@ function haversineKm(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-let drivingService = null;
+const services = {};
+
+function getFirstRoute(res) {
+  const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
+  if (!routes[0]) throw new Error('未找到路线');
+  return routes[0];
+}
 
 // WebService 返回的路线坐标经过前向差分压缩，需解压
 function decompressPolyline(coords) {
@@ -339,17 +384,91 @@ function decompressPolyline(coords) {
   return out;
 }
 
-async function fetchDrive(from, to) {
-  if (!drivingService) drivingService = new TMap.service.Driving({ policy: 'LEAST_TIME' });
-  const res = await drivingService.search({ from: new TMap.LatLng(from.lat, from.lng), to: new TMap.LatLng(to.lat, to.lng) });
-  const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
-  const route = routes[0];
-  if (!route) return null;
-  return {
-    distance: route.distance || 0,   // 米
-    duration: route.duration || 0,   // 秒
-    path: decompressPolyline(route.polyline),
-  };
+/* 按当前出行方式请求两点间真实路线：
+   transit（地铁+步行）/ walk（步行）/ drive（驾车）
+   返回 { distance(米), duration(秒), paths: [每段一条折线] } */
+async function fetchLeg(from, to) {
+  const f = new TMap.LatLng(from.lat, from.lng);
+  const t = new TMap.LatLng(to.lat, to.lng);
+
+  if (state.travelMode === 'transit') {
+    if (!services.transit) services.transit = new TMap.service.Transit();
+    const res = await services.transit.search({ from: f, to: t });
+    const plans = (res && res.result && res.result.plans) || (res && res.plans) || [];
+    const plan = plans[0];
+    if (!plan) throw new Error('未找到公交方案');
+    const polys = [];
+    (plan.segments || plan.steps || []).forEach((seg) => {
+      ['walk', 'car', 'bus', 'railway', 'coach'].forEach((k) => {
+        const part = seg[k];
+        if (part && part.polyline) {
+          const p = decompressPolyline(part.polyline);
+          if (p && p.length > 1) polys.push(p);
+        }
+      });
+    });
+    return { distance: plan.distance || 0, duration: plan.duration || 0, paths: polys };
+  }
+
+  if (state.travelMode === 'walk') {
+    if (!services.walk) services.walk = new TMap.service.Walking();
+    const res = await services.walk.search({ from: f, to: t });
+    const r = getFirstRoute(res);
+    return { distance: r.distance || 0, duration: r.duration || 0, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+  }
+
+  if (!services.drive) services.drive = new TMap.service.Driving({ policy: 'LEAST_TIME' });
+  const res = await services.drive.search({ from: f, to: t });
+  const r = getFirstRoute(res);
+  return { distance: r.distance || 0, duration: r.duration || 0, paths: [decompressPolyline(r.polyline)].filter(Boolean) };
+}
+
+function modeLabel() {
+  return { transit: '公交地铁', walk: '步行', drive: '驾车' }[state.travelMode] || '';
+}
+
+function drawPaths(paths) {
+  if (!state.map || !paths) return;
+  paths.forEach((p, i) => {
+    const ll = p.map((pt) => (pt instanceof TMap.LatLng ? pt : new TMap.LatLng(pt.lat, pt.lng)));
+    if (ll.length > 1) {
+      state.routeLayer.add({ id: 'leg-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1e4), styleId: 'drive', paths: ll });
+    }
+  });
+}
+
+function drawStraight(a, b) {
+  if (!state.map) return;
+  state.routeLayer.add({
+    id: 'straight-' + Date.now(),
+    styleId: 'fallback',
+    paths: [new TMap.LatLng(a.lat, a.lng), new TMap.LatLng(b.lat, b.lng)],
+  });
+}
+
+/* 整条闭环（酒店→各目的地→酒店）逐段请求真实路线并绘制 */
+async function drawFullRoute() {
+  clearRoute();
+  if (!state.hotel || state.spots.length < 1) return { totalKm: 0, totalMin: 0, ok: true };
+  const seq = [state.hotel.location, ...state.spots.map((s) => s.location), state.hotel.location];
+  let totalM = 0, totalS = 0, ok = true;
+  for (let i = 0; i < seq.length - 1; i++) {
+    try {
+      const leg = await fetchLeg(seq[i], seq[i + 1]);
+      totalM += leg.distance;
+      totalS += leg.duration;
+      if (leg.paths && leg.paths.length) drawPaths(leg.paths);
+      else throw new Error('empty');
+    } catch (err) {
+      console.warn('路段规划失败，按直线估算', err);
+      ok = false;
+      drawStraight(seq[i], seq[i + 1]);
+      const d = haversineKm(seq[i], seq[i + 1]);
+      totalM += d * 1000;
+      totalS += (d / 4.8) * 3600; // 按 4.8km/h 步行估算
+    }
+  }
+  return { totalKm: totalM / 1000, totalMin: Math.round(totalS / 60), ok };
 }
 
 /* ─────────── 渲染 ─────────── */
@@ -363,6 +482,7 @@ function renderAll() {
   const hasAny = !!(state.hotel || state.spots.length);
   $('fitBtn').hidden = !hasAny;
   $('sortBtn').hidden = !(state.hotel && state.spots.length >= 2);
+  $('modeTabs').hidden = !(state.hotel && state.spots.length >= 1);
 }
 
 function renderHotel() {
@@ -463,10 +583,13 @@ function fitBounds() {
 /* ─────────── 驾车路线 ─────────── */
 function clearRoute() {
   if (state.routeLayer) state.routeLayer.setGeometries([]);
+  if (state.infoWindow) state.infoWindow.close();
 }
 
 async function toggleRoute(id) {
   if (!state.hotel || !state.map) return;
+  const spot = state.spots.find((s) => s.id === id);
+  if (!spot) return;
   if (state.activeSpotId === id && state.routeLayer.getGeometries().length) {
     state.activeSpotId = null;
     clearRoute();
@@ -474,31 +597,25 @@ async function toggleRoute(id) {
     return;
   }
   state.activeSpotId = id;
-  const spot = state.spots.find((s) => s.id === id);
-  if (!spot) return;
   clearRoute();
   renderList();
+  showToast('路线计算中…');
   try {
-    const drive = await fetchDrive(state.hotel.location, spot.location);
-    if (!drive) throw new Error('no route');
-    spot.drive = { distance: drive.distance, duration: drive.duration };
-    persist();
-    if (drive.path && drive.path.length > 1) {
-      const paths = drive.path.map((p) =>
-        p instanceof TMap.LatLng ? p : new TMap.LatLng(p.lat !== undefined ? p.lat : p[0], p.lng !== undefined ? p.lng : p[1])
-      );
-      state.routeLayer.setGeometries([{ id: 'route-' + id, styleId: 'drive', paths }]);
-    }
-    renderList();
-    renderStats();
+    const leg = await fetchLeg(state.hotel.location, spot.location);
+    spot.drive = { distance: leg.distance, duration: leg.duration };
+    if (leg.paths && leg.paths.length) drawPaths(leg.paths);
+    else throw new Error('empty');
+    showToast(`${modeLabel()} ${(leg.distance / 1000).toFixed(1)} km · 约 ${Math.max(1, Math.round(leg.duration / 60))} 分钟`);
   } catch (err) {
     console.warn('路线规划失败', err);
     const straight = haversineKm(state.hotel.location, spot.location);
-    spot.drive = { distance: straight * 1000 * 1.3, duration: (straight / 30) * 3600 };
-    persist();
-    renderList();
-    renderStats();
+    spot.drive = { distance: straight * 1300, duration: (straight / 4.8) * 3600 };
+    drawStraight(state.hotel.location, spot.location);
+    showToast('该路段未查到方案，已按直线估算');
   }
+  persist();
+  renderList();
+  renderStats();
 }
 
 /* ─────────── 智能排序：带偏序约束的最短闭环（状压 DP / 贪心降级） ───────────
@@ -597,21 +714,21 @@ function showToast(msg) {
   showToast._timer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-function applySmartSort() {
+async function applySmartSort() {
   if (!state.hotel || state.spots.length < 2) return;
+  const btn = $('sortBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 计算最优顺序…';
   const order = optimizeOrder(state.hotel.location, state.spots);
   state.spots = order.map((i) => state.spots[i]);
   state.activeSpotId = null;
-  clearRoute();
   persist();
   renderAll();
-  const total = state.spots.reduce(
-    (sum, s, i, arr) => sum + (i === 0
-      ? haversineKm(state.hotel.location, s.location)
-      : haversineKm(arr[i - 1].location, s.location)),
-    haversineKm(state.spots[state.spots.length - 1].location, state.hotel.location)
-  );
-  showToast(`已按最短路线排序：闭环全程约 ${total.toFixed(1)} km`);
+  const { totalKm, totalMin, ok } = await drawFullRoute();
+  renderStats();
+  btn.disabled = false;
+  btn.textContent = '🧭 智能排序 · 最短路线闭环';
+  showToast(`闭环全程约 ${totalKm.toFixed(1)} km · ${modeLabel()}约 ${Math.max(1, totalMin)} 分钟${ok ? '' : '（部分路段为估算）'}`);
 }
 
 /* ─────────── 事件绑定 ─────────── */
@@ -630,6 +747,18 @@ $('hotelClear').addEventListener('click', () => {
 $('fitBtn').addEventListener('click', fitBounds);
 
 $('sortBtn').addEventListener('click', applySmartSort);
+
+$('modeTabs').querySelectorAll('button').forEach((b) => {
+  b.addEventListener('click', () => {
+    state.travelMode = b.dataset.mode;
+    $('modeTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+    clearRoute();
+    state.spots.forEach((s) => (s.drive = null));
+    persist();
+    renderList();
+    renderStats();
+  });
+});
 
 $('sheetToggle').addEventListener('click', () => {
   $('panel').classList.toggle('collapsed');

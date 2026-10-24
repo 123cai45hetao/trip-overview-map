@@ -70,6 +70,12 @@
         还没有目的地。<br>添加 2 个以上地点，地图会自动连线并给出视角总览。
       </p>
 
+      <div class="mode-tabs" id="modeTabs" hidden>
+        <button data-mode="transit" class="active">🚇 地铁+步行</button>
+        <button data-mode="walk">🚶 步行</button>
+        <button data-mode="drive">🚗 驾车</button>
+      </div>
+
       <button id="sortBtn" class="btn btn-sort" hidden>🧭 智能排序 · 最短路线闭环</button>
 
       <div class="panel-footer">
@@ -83,7 +89,7 @@
         </div>
         <div class="stat">
           <span class="stat-num" id="statDrive">—</span>
-          <span class="stat-label">总驾车 km</span>
+          <span class="stat-label">总里程 km</span>
         </div>
       </div>
       <div class="barcode" aria-hidden="true"></div>
