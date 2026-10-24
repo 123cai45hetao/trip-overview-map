@@ -495,4 +495,23 @@ body {
   .brand-title { font-size: 19px; letter-spacing: 4px; }
   .brand-mark { width: 38px; height: 38px; font-size: 18px; }
   .suggest { max-height: 160px; }
+
+  /* 触控目标不小于 44px 高 */
+  .btn, .btn-sort { min-height: 44px; }
+  .spot-row { min-height: 48px; padding-top: 6px; padding-bottom: 6px; }
+  .spot-acts button { width: 40px; height: 40px; }
+  .route-toggle { min-height: 36px; padding-top: 4px; padding-bottom: 4px; }
+  .depart-row input { min-height: 40px; }
+  .mode-tabs button { min-height: 40px; }
+
+  /* 行程单在手机上更好读 */
+  .route-detail { font-size: 13px; padding: 10px 12px; }
+  .route-detail li { line-height: 1.7; margin-bottom: 6px; }
+
+  /* 底部安全区（iPhone 手势条） */
+  .panel { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(18px + env(safe-area-inset-bottom)); }
+
+  /* 地图上的编号小圆点在手机上不容易点错 */
+  .map-wrap { border-radius: 0; }
 }

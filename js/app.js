@@ -743,6 +743,17 @@ async function applySmartSort() {
   if (!state.hotel || state.spots.length < 2) return;
   const btn = $('sortBtn');
   btn.disabled = true;
+  try {
+    await runSmartSort(btn);
+  } catch (err) {
+    console.warn('排序异常', err);
+    showToast('排序出错，请重试');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runSmartSort(btn) {
 
   const pts = [state.hotel.location, ...state.spots.map((s) => s.location)];
   const m = pts.length;
@@ -803,7 +814,8 @@ async function applySmartSort() {
   for (let i = 0; i < seq.length - 1; i++) {
     let used = null;
     for (const mode of [state.travelMode, 'walk', 'drive']) {
-      const leg = await fetchLegCached(mode, seq[i], seq[i + 1]);
+      let leg = null;
+      try { leg = await fetchLegCached(mode, seq[i], seq[i + 1]); } catch (_) { /* 服务失败按无结果处理 */ }
       if (leg && leg.paths && leg.paths.length) { used = leg; break; }
     }
     if (used) {
