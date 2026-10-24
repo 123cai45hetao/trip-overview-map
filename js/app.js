@@ -666,16 +666,24 @@ const legCache = new Map();
 const legKey = (mode, a, b) =>
   mode + '|' + a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 
-async function fetchLegCached(mode, a, b) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let lastReqAt = 0;
+
+async function fetchLegCached(mode, a, b, retries = 2) {
   const k = legKey(mode, a, b);
   if (legCache.has(k)) return legCache.get(k);
-  try {
-    const v = await fetchLeg(mode, a, b);
-    if (v) legCache.set(k, v); // 只缓存成功结果，失败的下次重试
-    return v;
-  } catch (err) {
-    return null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      // QPS 节流：距上次请求不足 300ms 就等待，避免触发限流
+      const wait = lastReqAt + 300 - Date.now();
+      if (wait > 0) await sleep(wait);
+      lastReqAt = Date.now();
+      const v = await fetchLeg(mode, a, b);
+      if (v) { legCache.set(k, v); return v; } // 只缓存成功结果
+    } catch (err) { /* 退避重试 */ }
+    if (attempt < retries) await sleep(500 * (attempt + 1));
   }
+  return null;
 }
 
 function getCachedLeg(mode, a, b) {
