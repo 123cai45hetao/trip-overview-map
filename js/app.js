@@ -559,6 +559,7 @@ function renderAll() {
   $('sortBtn').hidden = !(state.hotel && state.spots.length >= 2);
   $('departRow').hidden = !(state.hotel && state.spots.length >= 2);
   $('routeToggleWrap').hidden = !(state.hotel && state.spots.length >= 2);
+  $('sortNote').hidden = !(state.hotel && state.spots.length >= 2);
   $('modeTabs').hidden = !(state.hotel && state.spots.length >= 1);
 }
 
@@ -861,7 +862,7 @@ async function runSmartSort(btn) {
     }
     rows.push(`<li><b>${fromName} → ${toName}</b><small>约 ${Math.max(1, Math.round(min / 60))} 分钟${sub} · ${arriveTxt}</small></li>`);
   }
-  box.innerHTML = `<div class="rd-title">📋 行程方案（${modeLabel()} · 闭环全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟）</div><ol>${rows.join('')}</ol>`;
+  box.innerHTML = `<div class="rd-title">📋 行程方案（${modeLabel()} · 闭环全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟）</div><ol>${rows.join('')}</ol><p class="rd-note">ℹ️ 总耗时相近的方案不止一个，重复排序可能给出不同顺序，均为较优路线。</p>`;
   box.hidden = false;
   showToast(`排序完成：全程约 ${Math.max(1, Math.round(totalS / 60))} 分钟${anchorOk ? '' : ' ⚠ 锚点时间约束无法满足，已按最省时排序'}${anyStraight || estimated ? '（含估算路段）' : ''}`);
 }

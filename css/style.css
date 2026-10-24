@@ -236,6 +236,14 @@ body {
 }
 .btn-sort:hover { background: rgba(34, 65, 94, .07); }
 
+/* 排序声明 */
+.sort-note {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 11.5px; line-height: 1.6;
+  color: var(--ink-soft);
+}
+
 /* 路线显示开关 */
 .route-toggle {
   display: flex; align-items: center; gap: 8px;
@@ -510,6 +518,7 @@ body {
   /* 行程单在手机上更好读 */
   .route-detail { font-size: 13px; padding: 10px 12px; }
   .route-detail li { line-height: 1.7; margin-bottom: 6px; }
+.rd-note { margin: 8px 0 0; font-size: 11px; color: var(--ink-soft); border-top: 1px dashed var(--line); padding-top: 6px; }
 
   /* 底部安全区（iPhone 手势条） */
   .panel { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
