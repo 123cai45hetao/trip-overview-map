@@ -159,14 +159,6 @@ function initMap() {
     geometries: [],
   });
 
-  state.infoWindow = new TMap.InfoWindow({
-    map: state.map,
-    position: new TMap.LatLng(22.5405, 114.0586),
-    offset: { x: 0, y: -46 },
-    content: '',
-    enableCustom: true,
-  });
-
   state.markerLayer.on('click', (e) => {
     const id = e.geometry && e.geometry.id;
     if (!id) return;
@@ -174,7 +166,7 @@ function initMap() {
       state.activeSpotId = null;
       clearRoute();
       focusMarker(state.hotel.location, 13);
-      state.infoWindow.close();
+      if (state.infoWindow) state.infoWindow.close();
       renderList();
       return;
     }
@@ -187,11 +179,27 @@ function initMap() {
     let html = `<b>${esc(s.name)}</b><span>距酒店 直线 ${straight.toFixed(1)} km`;
     if (s.drive) html += ` · ${modeLabel()}约 ${Math.max(1, Math.round(s.drive.duration / 60))} 分钟`;
     html += '</span>';
-    state.infoWindow.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
-    state.infoWindow.setContent(`<div class="iw">${html}</div>`);
-    state.infoWindow.open();
+    if (state.infoWindow) {
+      state.infoWindow.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
+      state.infoWindow.setContent(`<div class="iw">${html}</div>`);
+      state.infoWindow.open();
+    }
     renderList();
   });
+
+  // 气泡组件放在最后创建，且失败不影响地图与其他交互
+  try {
+    state.infoWindow = new TMap.InfoWindow({
+      map: state.map,
+      position: new TMap.LatLng(22.5405, 114.0586),
+      offset: { x: 0, y: -46 },
+      content: '',
+      enableCustom: true,
+    });
+  } catch (err) {
+    console.warn('InfoWindow 初始化失败', err);
+    state.infoWindow = null;
+  }
 
   state.map.on('click', () => state.infoWindow && state.infoWindow.close());
 }
@@ -384,14 +392,14 @@ function decompressPolyline(coords) {
   return out;
 }
 
-/* 按当前出行方式请求两点间真实路线：
+/* 按指定出行方式请求两点间真实路线：
    transit（地铁+步行）/ walk（步行）/ drive（驾车）
    返回 { distance(米), duration(秒), paths: [每段一条折线] } */
-async function fetchLeg(from, to) {
+async function fetchLeg(mode, from, to) {
   const f = new TMap.LatLng(from.lat, from.lng);
   const t = new TMap.LatLng(to.lat, to.lng);
 
-  if (state.travelMode === 'transit') {
+  if (mode === 'transit') {
     if (!services.transit) services.transit = new TMap.service.Transit();
     const res = await services.transit.search({ from: f, to: t });
     const routes = (res && res.result && res.result.routes) || (res && res.routes) || [];
@@ -410,7 +418,7 @@ async function fetchLeg(from, to) {
     return { distance: route.distance || 0, duration: (route.duration || 0) * 60, paths: polys }; // duration 官方单位为分钟
   }
 
-  if (state.travelMode === 'walk') {
+  if (mode === 'walk') {
     if (!services.walk) services.walk = new TMap.service.Walking();
     const res = await services.walk.search({ from: f, to: t });
     const r = getFirstRoute(res);
@@ -453,14 +461,23 @@ async function drawFullRoute() {
   const seq = [state.hotel.location, ...state.spots.map((s) => s.location), state.hotel.location];
   let totalM = 0, totalS = 0, ok = true;
   for (let i = 0; i < seq.length - 1; i++) {
-    try {
-      const leg = await fetchLeg(seq[i], seq[i + 1]);
-      totalM += leg.distance;
-      totalS += leg.duration;
-      if (leg.paths && leg.paths.length) drawPaths(leg.paths);
-      else throw new Error('empty');
-    } catch (err) {
-      console.warn('路段规划失败，按直线估算', err);
+    let done = false;
+    // 降级链：所选模式 → 步行 → 直线估算
+    for (const mode of [state.travelMode, 'walk']) {
+      try {
+        const leg = await fetchLeg(mode, seq[i], seq[i + 1]);
+        totalM += leg.distance;
+        totalS += leg.duration;
+        if (leg.paths && leg.paths.length) drawPaths(leg.paths);
+        else throw new Error('empty');
+        done = true;
+        break;
+      } catch (err) {
+        /* 尝试下一级 */
+      }
+    }
+    if (!done) {
+      console.warn('路段无法规划，按直线估算', seq[i], '→', seq[i + 1]);
       ok = false;
       drawStraight(seq[i], seq[i + 1]);
       const d = haversineKm(seq[i], seq[i + 1]);
@@ -600,18 +617,21 @@ async function toggleRoute(id) {
   clearRoute();
   renderList();
   showToast('路线计算中…');
-  try {
-    const leg = await fetchLeg(state.hotel.location, spot.location);
-    spot.drive = { distance: leg.distance, duration: leg.duration };
-    if (leg.paths && leg.paths.length) drawPaths(leg.paths);
-    else throw new Error('empty');
-    showToast(`${modeLabel()} ${(leg.distance / 1000).toFixed(1)} km · 约 ${Math.max(1, Math.round(leg.duration / 60))} 分钟`);
-  } catch (err) {
-    console.warn('路线规划失败', err);
+  let done = false;
+  for (const mode of [state.travelMode, 'walk']) {
+    try {
+      const leg = await fetchLeg(mode, state.hotel.location, spot.location);
+      spot.drive = { distance: leg.distance, duration: leg.duration };
+      if (leg.paths && leg.paths.length) { drawPaths(leg.paths); done = true; break; }
+    } catch (err) { /* 尝试下一级 */ }
+  }
+  if (!done) {
     const straight = haversineKm(state.hotel.location, spot.location);
     spot.drive = { distance: straight * 1300, duration: (straight / 4.8) * 3600 };
     drawStraight(state.hotel.location, spot.location);
     showToast('该路段未查到方案，已按直线估算');
+  } else {
+    showToast(`${modeLabel()} ${(spot.drive.distance / 1000).toFixed(1)} km · 约 ${Math.max(1, Math.round(spot.drive.duration / 60))} 分钟`);
   }
   persist();
   renderList();
