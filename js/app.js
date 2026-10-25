@@ -188,48 +188,16 @@ function initMap() {
       state.activeSpotId = null;
       clearRoute();
       focusMarker(state.hotel.location, 13);
-      if (state.infoWindow) state.infoWindow.close();
       renderList();
       return;
     }
     const sid = String(id).slice(5);
     const s = state.spots.find((x) => x.id === sid);
-    if (!s || !state.hotel) return;
+    if (!s) return;
     state.activeSpotId = sid;
-    const straight = haversineKm(state.hotel.location, s.location);
-    let html = `<b>${esc(s.name)}</b><span>距酒店 直线 ${straight.toFixed(1)} km`;
-    if (s.drive) html += ` · ${modeLabel()}约 ${Math.max(1, Math.round(s.drive.duration / 60))} 分钟`;
-    html += '</span>';
-    if (state.infoWindow) {
-      const iw = state.infoWindow;
-      const content = `<div class="iw">${html}</div>`;
-      iw.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
-      iw.setContent(content);
-      iw.open();
-      // 防竞态：地图平移动画可能吞掉自定义气泡内容导致"空白菜单"，动画结束后补写一次
-      setTimeout(() => {
-        try { if (state.activeSpotId === sid) iw.setContent(content); } catch (_) { /* 忽略 */ }
-      }, 400);
-    }
     focusMarker(s.location, 15);
     renderList();
   });
-
-  // 气泡组件放在最后创建，且失败不影响地图与其他交互
-  try {
-    state.infoWindow = new TMap.InfoWindow({
-      map: state.map,
-      position: new TMap.LatLng(22.5405, 114.0586),
-      offset: { x: 0, y: -46 },
-      content: '',
-      enableCustom: true,
-    });
-  } catch (err) {
-    console.warn('InfoWindow 初始化失败', err);
-    state.infoWindow = null;
-  }
-
-  state.map.on('click', () => state.infoWindow && state.infoWindow.close());
 }
 
 function focusMarker(loc, zoom) {
@@ -702,7 +670,6 @@ function clearRoute() {
   state.routeGeoms = [];
   if (state.routeLayer) state.routeLayer.setGeometries([]);
   if (state.labelLayer) state.labelLayer.setGeometries([]);
-  if (state.infoWindow) state.infoWindow.close();
   const box = $('routeDetail');
   if (box) { box.hidden = true; box.innerHTML = ''; }
 }
