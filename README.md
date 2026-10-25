@@ -36,7 +36,7 @@
 ### 2. 运行
 
 ```bash
-git clone https://github.com/<你的用户名>/trip-overview-map.git
+git clone https://github.com/123cai45hetao/trip-overview-map.git
 cd trip-overview-map
 # 直接双击 index.html，或起一个本地服务：
 python -m http.server 8080
