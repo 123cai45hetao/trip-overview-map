@@ -194,18 +194,24 @@ function initMap() {
     }
     const sid = String(id).slice(5);
     const s = state.spots.find((x) => x.id === sid);
-    if (!s) return;
+    if (!s || !state.hotel) return;
     state.activeSpotId = sid;
-    focusMarker(s.location, 15);
     const straight = haversineKm(state.hotel.location, s.location);
     let html = `<b>${esc(s.name)}</b><span>距酒店 直线 ${straight.toFixed(1)} km`;
     if (s.drive) html += ` · ${modeLabel()}约 ${Math.max(1, Math.round(s.drive.duration / 60))} 分钟`;
     html += '</span>';
     if (state.infoWindow) {
-      state.infoWindow.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
-      state.infoWindow.setContent(`<div class="iw">${html}</div>`);
-      state.infoWindow.open();
+      const iw = state.infoWindow;
+      const content = `<div class="iw">${html}</div>`;
+      iw.setPosition(new TMap.LatLng(s.location.lat, s.location.lng));
+      iw.setContent(content);
+      iw.open();
+      // 防竞态：地图平移动画可能吞掉自定义气泡内容导致"空白菜单"，动画结束后补写一次
+      setTimeout(() => {
+        try { if (state.activeSpotId === sid) iw.setContent(content); } catch (_) { /* 忽略 */ }
+      }, 400);
     }
+    focusMarker(s.location, 15);
     renderList();
   });
 
