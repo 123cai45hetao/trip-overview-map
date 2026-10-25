@@ -528,23 +528,54 @@ function drawStraight(a, b, seq = null) {
   renderRouteGeoms();
 }
 
+/* 折线抽稀：点数过多时按跨度等距采样（保留首尾点），
+   大幅降低移动端 webview 的渲染/内存压力，视觉上几乎无差别 */
+function thinPath(ll, max = 200) {
+  if (ll.length <= max) return ll;
+  const out = [];
+  const step = (ll.length - 1) / (max - 1);
+  for (let i = 0; i < max; i++) out.push(ll[Math.round(i * step)]);
+  return out;
+}
+
 /* 按开关状态重绘路线与编号（关闭开关只隐藏，不清空记录） */
 function renderRouteGeoms() {
   if (!state.routeLayer) return;
-  state.routeLayer.setGeometries([]);
-  if (state.labelLayer) state.labelLayer.setGeometries([]);
-  if (!state.showRoute) return;
-  const polys = [], labels = [];
-  state.routeGeoms.forEach((g, i) => {
-    if (g.type === 'path') {
-      polys.push({ id: 'rg-' + i, styleId: g.styleId, paths: g.paths });
-    } else if (g.type === 'label' && g.seq <= MAX_LEG_STYLES) {
-      labels.push({ id: 'lg-' + i, styleId: 'leg-' + (g.seq - 1), position: new TMap.LatLng(g.lat, g.lng) });
-    }
-  });
-  state.routeLayer.add(polys);
-  if (state.labelLayer && labels.length) state.labelLayer.add(labels);
+  try {
+    state.routeLayer.setGeometries([]);
+    if (state.labelLayer) state.labelLayer.setGeometries([]);
+    if (!state.showRoute) return;
+    const polys = [], labels = [];
+    state.routeGeoms.forEach((g, i) => {
+      if (g.type === 'path') {
+        polys.push({ id: 'rg-' + i, styleId: g.styleId, paths: thinPath(g.paths) });
+      } else if (g.type === 'label' && g.seq <= MAX_LEG_STYLES) {
+        labels.push({ id: 'lg-' + i, styleId: 'leg-' + (g.seq - 1), position: new TMap.LatLng(g.lat, g.lng) });
+      }
+    });
+    state.routeLayer.add(polys);
+    if (state.labelLayer && labels.length) state.labelLayer.add(labels);
+  } catch (err) {
+    console.warn('路线渲染异常，已跳过本轮', err); // 渲染失败不能拖垮整个页面
+  }
 }
+
+/* ── 移动端地图看门狗：容器塌陷/渲染丢失时自动恢复 ── */
+function checkMapHealth() {
+  if (!state.map) return;
+  const wrap = document.querySelector('.map-wrap');
+  if (!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  if (rect.height < 40 && window.innerHeight > 200) {
+    wrap.style.height = ''; // 清掉可能的内联高度塌陷，交回样式表
+    notifyMapResize();
+  }
+  // 页面在视口内但地图容器可见时，周期性让地图重算（iOS 工具栏伸缩导致 dvh 漂移）
+  if (rect.height > 60 && rect.top < window.innerHeight && !document.hidden) notifyMapResize();
+}
+setInterval(checkMapHealth, 3000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { notifyMapResize(); checkMapHealth(); } });
+window.addEventListener('orientationchange', () => setTimeout(() => { notifyMapResize(); checkMapHealth(); }, 420));
 
 /* ─────────── 渲染 ─────────── */
 function renderAll() {
